@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import re
 import io
 import yfinance as yf
+import streamlit.components.v1 as components # Wajib ada untuk hack Numpad
 from datetime import datetime
 
 # ==========================================
@@ -32,7 +33,6 @@ def inject_custom_css():
     bg_color = "#0e1117" if mode == "dark" else "#ffffff"
     text_color = "#ffffff" if mode == "dark" else "#000000"
     card_bg = "#262730" if mode == "dark" else "#f0f2f6"
-    accent_color = "#ff4b4b"
     
     st.markdown(f"""
     <style>
@@ -47,28 +47,27 @@ def inject_custom_css():
             display: flex;
             justify_content: center;
             align-items: center;
-            height: 70vh; /* Tinggi layar login */
+            height: 70vh;
             flex-direction: column;
         }}
-        .login-card {{
-            background-color: {card_bg};
-            padding: 40px;
-            border-radius: 20px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-            width: 100%;
-            max-width: 400px; /* Lebar maksimal di desktop */
-            text-align: center;
-            border: 1px solid #444;
-        }}
         
-        /* Input Field Styling */
+        /* Input Field Styling (PIN LOOK) */
         .stTextInput input {{
             text-align: center;
-            font-size: 24px;
-            letter-spacing: 5px;
+            font-size: 32px !important; /* Font Besar agar enak di HP */
+            letter-spacing: 8px;
             font-weight: bold;
             padding: 15px;
-            border-radius: 10px;
+            border-radius: 12px;
+            background-color: {card_bg};
+            color: {text_color};
+            border: 2px solid #555;
+            transition: all 0.3s ease;
+        }}
+        
+        .stTextInput input:focus {{
+            border-color: #ff4b4b;
+            box-shadow: 0 0 10px rgba(255, 75, 75, 0.5);
         }}
         
         /* Button Styling */
@@ -76,7 +75,9 @@ def inject_custom_css():
             width: 100%;
             border-radius: 10px;
             font-weight: bold;
-            height: 50px;
+            height: 55px;
+            font-size: 18px;
+            margin-top: 10px;
         }}
         
         /* Running Text / Ticker */
@@ -117,20 +118,14 @@ def inject_custom_css():
             z-index: 999;
         }}
         
-        /* --- MEDIA QUERY UNTUK MOBILE (RESPONSIF) --- */
+        /* --- MEDIA QUERY UNTUK MOBILE --- */
         @media only screen and (max-width: 600px) {{
-            .login-card {{
-                padding: 20px;
-                width: 90%; /* Lebih lebar di HP */
-            }}
             .stTextInput input {{
-                font-size: 20px;
+                font-size: 28px !important;
             }}
             h1 {{ font-size: 24px !important; }}
             h2 {{ font-size: 20px !important; }}
             .ticker-item {{ font-size: 12px; }}
-            
-            /* Sembunyikan sidebar di mobile defaultnya collapsed */
         }}
     </style>
     """, unsafe_allow_html=True)
@@ -145,7 +140,6 @@ def get_stock_ticker():
     tickers = ["BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "TLKM.JK", "ASII.JK", "GOTO.JK", "BUMI.JK", "ADRO.JK"]
     ticker_html = ""
     try:
-        # Download data terakhir & kemarin
         data = yf.download(tickers, period="5d", progress=False)['Close']
         if data.empty: return "<span class='ticker-item'>Market Closed / No Data</span>"
         
@@ -157,13 +151,10 @@ def get_stock_ticker():
             try:
                 price = last_prices[symbol]
                 prev = prev_prices[symbol]
-                
-                # Handling NaN
                 if pd.isna(price) or pd.isna(prev): continue
                 
                 change = price - prev
                 pct_change = (change / prev) * 100
-                
                 color_class = "up" if change >= 0 else "down"
                 sign = "+" if change >= 0 else ""
                 
@@ -318,35 +309,47 @@ def create_sankey_figure(labels, colors, src, tgt, val, l_colors):
     return fig
 
 # ==========================================
-# 4. SISTEM LOGIN (REVISED FOR KEYBOARD)
+# 4. SISTEM LOGIN (KEYBOARD NUMPAD FIX)
 # ==========================================
 
 def login_system():
     inject_custom_css()
     
-    # Container Login di Tengah
+    # --- JAVASCRIPT HACK UNTUK NUMPAD ---
+    # Ini akan memaksa input type="password" menjadi inputmode="numeric" di browser HP
+    # dan otomatis memunculkan keyboard angka.
+    components.html("""
+        <script>
+            const inputs = window.parent.document.querySelectorAll('input[type="password"]');
+            inputs.forEach(input => {
+                input.setAttribute('inputmode', 'numeric');
+                input.setAttribute('pattern', '[0-9]*');
+            });
+        </script>
+    """, height=0, width=0)
+    # -------------------------------------
+
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        st.markdown("<div style='height: 100px;'></div>", unsafe_allow_html=True) # Spacer
+        st.markdown("<div style='height: 80px;'></div>", unsafe_allow_html=True)
         
-        # Menggunakan st.form agar bisa submit pakai ENTER
         with st.form("login_form"):
-            st.markdown("<h2 style='text-align: center;'>🔐 Restricted Access</h2>", unsafe_allow_html=True)
-            st.markdown("<p style='text-align: center; margin-bottom: 20px;'>Masukkan PIN Keamanan untuk melanjutkan</p>", unsafe_allow_html=True)
+            st.markdown("<h2 style='text-align: center; margin-bottom: 5px;'>🔐 Restricted Access</h2>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; color: #888; margin-bottom: 30px;'>Input PIN Access</p>", unsafe_allow_html=True)
             
-            # INPUT BIASA (Bukan Tombol) -> Bisa pakai Keyboard
-            pin_input = st.text_input("PIN", type="password", placeholder="Masukan 6 digit PIN", label_visibility="collapsed")
+            # Input PIN (Type Password tapi di-hack JS jadi Numpad)
+            # Label visibility collapsed agar rapi
+            pin_input = st.text_input("PIN", type="password", placeholder="••••••", label_visibility="collapsed")
             
-            # Tombol Submit
             submit = st.form_submit_button("LOGIN ➔", type="primary")
             
             if submit:
                 if pin_input == "241130":
                     st.session_state['authenticated'] = True
-                    st.rerun() # Refresh halaman untuk masuk
+                    st.rerun()
                 else:
-                    st.error("❌ PIN Salah! Silakan coba lagi.")
+                    st.error("❌ PIN Salah!")
 
 # ==========================================
 # 5. MAIN APPLICATION
@@ -376,7 +379,7 @@ def main():
     
     # Konten Utama
     st.title("📊 Broker Distribution Analyzer")
-    st.markdown("Tools analisis bandarmologi Running Trade BEI (Responsive).")
+    st.markdown("Tools analisis bandarmologi Running Trade BEI.")
     
     st.sidebar.header("📂 Input Data")
     uploaded_file = st.sidebar.file_uploader("Upload File Running Trade", type=['csv', 'xlsx', 'xls'])
