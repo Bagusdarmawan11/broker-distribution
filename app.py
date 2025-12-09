@@ -19,52 +19,90 @@ st.set_page_config(
 # Inisialisasi Session State
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
-if 'pin_input' not in st.session_state:
-    st.session_state['pin_input'] = ""
 if 'dark_mode' not in st.session_state:
     st.session_state['dark_mode'] = True
 
 # ==========================================
-# 2. FITUR UI & CSS CUSTOM
+# 2. CSS CUSTOM (RESPONSIF & UI)
 # ==========================================
-
-# CSS untuk Styling (Dark/Light, Footer, PIN Pad)
 def inject_custom_css():
     mode = "dark" if st.session_state['dark_mode'] else "light"
     
-    # Warna dasar berdasarkan mode
+    # Warna Theme
     bg_color = "#0e1117" if mode == "dark" else "#ffffff"
     text_color = "#ffffff" if mode == "dark" else "#000000"
     card_bg = "#262730" if mode == "dark" else "#f0f2f6"
+    accent_color = "#ff4b4b"
     
     st.markdown(f"""
     <style>
-        /* Main Background */
+        /* Global Background */
         .stApp {{
             background-color: {bg_color};
             color: {text_color};
         }}
         
-        /* PIN Pad Styling */
-        .pin-display {{
-            font-size: 40px;
-            font-weight: bold;
-            text-align: center;
-            letter-spacing: 10px;
-            margin-bottom: 20px;
-            color: {text_color};
+        /* LOGIN CARD STYLING (CENTERED) */
+        .login-container {{
+            display: flex;
+            justify_content: center;
+            align-items: center;
+            height: 70vh; /* Tinggi layar login */
+            flex-direction: column;
+        }}
+        .login-card {{
             background-color: {card_bg};
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 400px; /* Lebar maksimal di desktop */
+            text-align: center;
+            border: 1px solid #444;
+        }}
+        
+        /* Input Field Styling */
+        .stTextInput input {{
+            text-align: center;
+            font-size: 24px;
+            letter-spacing: 5px;
+            font-weight: bold;
             padding: 15px;
             border-radius: 10px;
         }}
+        
+        /* Button Styling */
         .stButton button {{
             width: 100%;
-            height: 60px;
-            font-size: 24px;
-            border-radius: 15px;
+            border-radius: 10px;
+            font-weight: bold;
+            height: 50px;
         }}
         
-        /* Footer Styling */
+        /* Running Text / Ticker */
+        .ticker-wrap {{
+            width: 100%;
+            background-color: {card_bg}; 
+            color: {text_color};
+            padding: 8px 0;
+            border-bottom: 1px solid #444;
+            white-space: nowrap;
+            overflow: hidden;
+            box-sizing: border-box;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }}
+        .ticker-item {{
+            display: inline-block;
+            padding: 0 15px;
+            font-size: 14px;
+            font-weight: bold;
+        }}
+        .up {{ color: #00ff00; }}
+        .down {{ color: #ff4b4b; }}
+        
+        /* Footer */
         .footer {{
             position: fixed;
             left: 0;
@@ -74,126 +112,69 @@ def inject_custom_css():
             color: {text_color};
             text-align: center;
             padding: 10px;
-            font-size: 14px;
+            font-size: 12px;
             border-top: 1px solid #444;
             z-index: 999;
         }}
         
-        /* Marquee/Ticker Styling */
-        .ticker-wrap {{
-            width: 100%;
-            background-color: {card_bg}; 
-            color: {text_color};
-            padding: 10px;
-            margin-bottom: 10px;
-            border-bottom: 1px solid #444;
-            white-space: nowrap;
-            overflow: hidden;
-            box-sizing: border-box;
+        /* --- MEDIA QUERY UNTUK MOBILE (RESPONSIF) --- */
+        @media only screen and (max-width: 600px) {{
+            .login-card {{
+                padding: 20px;
+                width: 90%; /* Lebih lebar di HP */
+            }}
+            .stTextInput input {{
+                font-size: 20px;
+            }}
+            h1 {{ font-size: 24px !important; }}
+            h2 {{ font-size: 20px !important; }}
+            .ticker-item {{ font-size: 12px; }}
+            
+            /* Sembunyikan sidebar di mobile defaultnya collapsed */
         }}
-        .ticker-item {{
-            display: inline-block;
-            padding: 0 20px;
-            font-size: 16px;
-            font-weight: bold;
-        }}
-        .up {{ color: #00ff00; }}
-        .down {{ color: #ff4b4b; }}
     </style>
     """, unsafe_allow_html=True)
 
-# Fungsi Ticker Saham (Ambil Data LQ45 Sampel)
-@st.cache_data(ttl=300) # Cache 5 menit agar tidak lambat
+# ==========================================
+# 3. FUNGSI LOGIKA (BACKEND)
+# ==========================================
+
+# Fungsi Ticker Saham
+@st.cache_data(ttl=300)
 def get_stock_ticker():
-    # Sampel saham LQ45 agar loading cepat (tidak semua 800 emiten)
-    tickers = ["BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "TLKM.JK", "ASII.JK", 
-               "UNTR.JK", "ICBP.JK", "GOTO.JK", "BUMI.JK", "ADRO.JK", "PGAS.JK"]
-    
+    tickers = ["BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "TLKM.JK", "ASII.JK", "GOTO.JK", "BUMI.JK", "ADRO.JK"]
     ticker_html = ""
     try:
-        data = yf.download(tickers, period="1d", progress=False)['Close']
-        # Ambil data hari sebelumnya (untuk hitung %)
-        prev_data = yf.download(tickers, period="2d", progress=False)['Close']
+        # Download data terakhir & kemarin
+        data = yf.download(tickers, period="5d", progress=False)['Close']
+        if data.empty: return "<span class='ticker-item'>Market Closed / No Data</span>"
+        
+        last_prices = data.iloc[-1]
+        prev_prices = data.iloc[-2]
         
         for symbol in tickers:
             clean_symbol = symbol.replace(".JK", "")
             try:
-                price = data[symbol].iloc[-1]
-                prev_price = prev_data[symbol].iloc[-2] if len(prev_data) > 1 else price
+                price = last_prices[symbol]
+                prev = prev_prices[symbol]
                 
-                change = price - prev_price
-                pct_change = (change / prev_price) * 100
+                # Handling NaN
+                if pd.isna(price) or pd.isna(prev): continue
+                
+                change = price - prev
+                pct_change = (change / prev) * 100
                 
                 color_class = "up" if change >= 0 else "down"
                 sign = "+" if change >= 0 else ""
                 
                 ticker_html += f"<span class='ticker-item'>{clean_symbol} {int(price):,} <span class='{color_class}'>({sign}{pct_change:.2f}%)</span></span>"
-            except:
-                continue
+            except: continue
     except:
-        ticker_html = "<span class='ticker-item'>Gagal memuat data pasar realtime.</span>"
+        return "<span class='ticker-item'>Gagal memuat data pasar.</span>"
         
-    return f"<marquee scrollamount='8'>{ticker_html}</marquee>"
+    return f"<marquee scrollamount='6'>{ticker_html}</marquee>"
 
-# ==========================================
-# 3. SISTEM PIN (KEYPAD UI)
-# ==========================================
-def update_pin(digit):
-    if len(st.session_state['pin_input']) < 6:
-        st.session_state['pin_input'] += digit
-
-def clear_pin():
-    st.session_state['pin_input'] = ""
-
-def check_pin():
-    if st.session_state['pin_input'] == '241130':
-        st.session_state['authenticated'] = True
-    else:
-        st.error("PIN Salah! Coba lagi.")
-        st.session_state['pin_input'] = ""
-
-# HALAMAN LOGIN
-if not st.session_state['authenticated']:
-    inject_custom_css() # Inject CSS untuk dark/light mode login
-    
-    col_center = st.columns([1, 2, 1])
-    with col_center[1]:
-        st.markdown("<h2 style='text-align: center;'>🔐 Restricted Access</h2>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center;'>Silakan masukkan PIN keamanan.</p>", unsafe_allow_html=True)
-        
-        # Display PIN (Masked)
-        display_pin = "•" * len(st.session_state['pin_input']) if st.session_state['pin_input'] else "ENTER PIN"
-        st.markdown(f"<div class='pin-display'>{display_pin}</div>", unsafe_allow_html=True)
-        
-        # Keypad Grid
-        c1, c2, c3 = st.columns(3)
-        with c1: 
-            if st.button("1"): update_pin("1")
-            if st.button("4"): update_pin("4")
-            if st.button("7"): update_pin("7")
-        with c2: 
-            if st.button("2"): update_pin("2")
-            if st.button("5"): update_pin("5")
-            if st.button("8"): update_pin("8")
-            if st.button("0"): update_pin("0")
-        with c3: 
-            if st.button("3"): update_pin("3")
-            if st.button("6"): update_pin("6")
-            if st.button("9"): update_pin("9")
-        
-        # Action Buttons
-        ac1, ac2 = st.columns(2)
-        with ac1:
-            if st.button("CLEAR", type="secondary"): clear_pin()
-        with ac2:
-            if st.button("LOGIN ➔", type="primary"): check_pin()
-            
-    st.stop() # Stop render jika belum login
-
-# ==========================================
-# 4. FUNGSI LOGIKA (DATA PROCESSING)
-# ==========================================
-
+# Fungsi Cleaning Data
 def clean_running_trade(df_input):
     df = df_input.copy()
     df.columns = df.columns.str.strip().str.capitalize()
@@ -252,6 +233,7 @@ def clean_running_trade(df_input):
 
     return df
 
+# Fungsi Agregasi
 def aggregate_broker_stats(df):
     buy_stats = df.groupby('Buyer_Code').agg({'Shares': 'sum', 'Value': 'sum'}).rename(columns={'Shares': 'Buy Vol', 'Value': 'Buy Val'})
     sell_stats = df.groupby('Seller_Code').agg({'Shares': 'sum', 'Value': 'sum'}).rename(columns={'Shares': 'Sell Vol', 'Value': 'Sell Val'})
@@ -336,36 +318,73 @@ def create_sankey_figure(labels, colors, src, tgt, val, l_colors):
     return fig
 
 # ==========================================
+# 4. SISTEM LOGIN (REVISED FOR KEYBOARD)
+# ==========================================
+
+def login_system():
+    inject_custom_css()
+    
+    # Container Login di Tengah
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        st.markdown("<div style='height: 100px;'></div>", unsafe_allow_html=True) # Spacer
+        
+        # Menggunakan st.form agar bisa submit pakai ENTER
+        with st.form("login_form"):
+            st.markdown("<h2 style='text-align: center;'>🔐 Restricted Access</h2>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; margin-bottom: 20px;'>Masukkan PIN Keamanan untuk melanjutkan</p>", unsafe_allow_html=True)
+            
+            # INPUT BIASA (Bukan Tombol) -> Bisa pakai Keyboard
+            pin_input = st.text_input("PIN", type="password", placeholder="Masukan 6 digit PIN", label_visibility="collapsed")
+            
+            # Tombol Submit
+            submit = st.form_submit_button("LOGIN ➔", type="primary")
+            
+            if submit:
+                if pin_input == "241130":
+                    st.session_state['authenticated'] = True
+                    st.rerun() # Refresh halaman untuk masuk
+                else:
+                    st.error("❌ PIN Salah! Silakan coba lagi.")
+
+# ==========================================
 # 5. MAIN APPLICATION
 # ==========================================
 
 def main():
-    # --- Sidebar Settings ---
-    st.sidebar.title("⚙️ Pengaturan")
+    # Cek Auth
+    if not st.session_state['authenticated']:
+        login_system()
+        st.stop() # Stop render konten utama jika belum login
+
+    # --- JIKA SUDAH LOGIN ---
     
-    # Toggle Dark Mode
+    # Sidebar Settings
+    st.sidebar.title("⚙️ Pengaturan")
     is_dark = st.sidebar.toggle("Dark Mode", value=True)
     st.session_state['dark_mode'] = is_dark
-    inject_custom_css() # Apply CSS based on toggle
+    inject_custom_css() # Re-inject CSS
     
-    # Logout Button
+    # Logout
     if st.sidebar.button("Logout 🔓"):
         st.session_state['authenticated'] = False
-        st.session_state['pin_input'] = ""
         st.rerun()
 
-    # --- Running Text (Ticker) ---
+    # Ticker Running Text
     st.markdown(get_stock_ticker(), unsafe_allow_html=True)
     
-    # --- Main Content ---
+    # Konten Utama
     st.title("📊 Broker Distribution Analyzer")
-    st.markdown("Tools analisis bandarmologi dengan data Running Trade BEI.")
+    st.markdown("Tools analisis bandarmologi Running Trade BEI (Responsive).")
     
     st.sidebar.header("📂 Input Data")
     uploaded_file = st.sidebar.file_uploader("Upload File Running Trade", type=['csv', 'xlsx', 'xls'])
 
     if not uploaded_file:
-        st.info("👋 Silakan upload file CSV atau Excel untuk memulai.")
+        st.info("👋 Silakan upload file CSV atau Excel.")
+        # Tampilkan footer
+        st.markdown("""<div class="footer">Copyright by PT Catindo Bagus Perkasa 2025 | Data Market Delay 15 Mins</div>""", unsafe_allow_html=True)
         return
 
     try:
@@ -376,7 +395,7 @@ def main():
             
         df_clean = clean_running_trade(df_raw)
         
-        # --- Filter Saham (Jika Ada) ---
+        # Filter Saham
         if 'Stock' in df_clean.columns:
             st.sidebar.markdown("---")
             st.sidebar.subheader("🔍 Filter Saham")
@@ -389,7 +408,7 @@ def main():
                 st.warning("Pilih minimal satu saham.")
                 st.stop()
         
-        # --- Metrik ---
+        # Metrik
         st.divider()
         c1, c2, c3 = st.columns(3)
         total_val = df_clean['Value'].sum()
@@ -400,17 +419,12 @@ def main():
         c2.metric("Total Volume", f"{total_vol:,.0f} Lot")
         c3.metric("Broker Terlibat", f"{unique_brokers}")
         
-        # --- Tabel Ringkasan (Dengan Matplotlib Gradient) ---
-        st.header("📋 Ringkasan Broker (Net Buy/Sell)")
-        
+        # Tabel
+        st.header("📋 Ringkasan Broker")
         min_vol = st.sidebar.number_input("Filter Min. Volume (Lot)", min_value=0, value=0, step=100)
-        
         summary_df = aggregate_broker_stats(df_clean)
-        filtered_summary = summary_df[
-            (summary_df['Buy Vol'] + summary_df['Sell Vol']) >= min_vol
-        ]
+        filtered_summary = summary_df[(summary_df['Buy Vol'] + summary_df['Sell Vol']) >= min_vol]
         
-        # Format Tabel
         st.dataframe(
             filtered_summary.style.format({
                 'Buy Val': "Rp {:,.0f}", 'Sell Val': "Rp {:,.0f}", 
@@ -422,7 +436,7 @@ def main():
             height=400
         )
 
-        # --- Sankey Diagram ---
+        # Sankey
         st.header("🕸️ Peta Aliran Dana")
         top_n = st.slider("Jumlah Interaksi Terbesar", 5, 50, 15)
         
@@ -431,14 +445,14 @@ def main():
             fig = create_sankey_figure(lbl, col, src, tgt, val, l_col)
             st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
-            st.warning("Data tidak cukup untuk grafik Sankey.")
+            st.warning("Data tidak cukup.")
 
     except ValueError as ve:
         st.error(f"❌ Format Data Salah: {str(ve)}")
     except Exception as e:
         st.error(f"❌ Error: {str(e)}")
         
-    # --- Footer ---
+    # Footer
     st.markdown("""
         <div class="footer">
             Copyright by PT Catindo Bagus Perkasa 2025 | Data Market Delay 15 Mins
