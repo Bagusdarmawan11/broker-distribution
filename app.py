@@ -91,51 +91,53 @@ def format_number_label(value):
     return f"{value:,.0f}"
 
 def inject_custom_css(is_dark_mode):
-    # Palet Warna Dinamis (Fix Light Mode Visibility)
+    # --- PALET WARNA (DIPERBAIKI UNTUK KONTRAS) ---
     if is_dark_mode:
         bg_color = "#0e1117"
         sidebar_bg = "#262730"
         text_color = "#ffffff"
         card_bg = "#1E1E1E"
-        border_color = "#444"
+        border_color = "#444444"
         input_bg = "#262730"
+        input_border = "#555555"
         shadow = "rgba(0,0,0,0.5)"
-        toggle_track = "#ff4b4b"
+        btn_hover = "#ff4b4b"
     else:
-        bg_color = "#FFFFFF"
-        sidebar_bg = "#F8F9FA"  # Abu sangat terang agar beda dengan konten
-        text_color = "#000000"
+        bg_color = "#FFFFFF"         # Background Putih Bersih
+        sidebar_bg = "#F0F2F6"       # Sidebar Abu-abu Muda (Standar Streamlit)
+        text_color = "#000000"       # Teks Hitam Pekat
         card_bg = "#FFFFFF"
         border_color = "#D1D1D1"
-        input_bg = "#FFFFFF"
+        input_bg = "#E8E8E8"         # Input agak abu-abu agar terlihat beda dari background
+        input_border = "#333333"     # Border gelap agar kotak PIN tegas
         shadow = "rgba(0,0,0,0.1)"
-        toggle_track = "#ff4b4b"
+        btn_hover = "#ff4b4b"
 
     st.markdown(f"""
     <style>
-        /* MAIN APP BACKGROUND */
+        /* MAIN APP */
         .stApp {{
             background-color: {bg_color};
             color: {text_color};
         }}
         
-        /* SIDEBAR STYLING */
-        [data-testid="stSidebar"] {{
+        /* SIDEBAR */
+        section[data-testid="stSidebar"] {{
             background-color: {sidebar_bg} !important;
             border-right: 1px solid {border_color};
         }}
         
-        /* TEXT COLORS (Force Contrast) */
-        h1, h2, h3, h4, h5, h6, p, li, span, label, div, .stMarkdown {{
+        /* MEMAKSA SEMUA TEKS JADI SESUAI TEMA (PENTING UNTUK LIGHT MODE) */
+        h1, h2, h3, h4, h5, h6, p, li, span, label, div, .stMarkdown, .stText {{
             color: {text_color} !important;
         }}
         
-        /* KHUSUS LABEL DI SIDEBAR (Agar Toggle & Radio Button Terbaca) */
+        /* KHUSUS LABEL DI SIDEBAR (Agar Toggle terlihat) */
         [data-testid="stSidebar"] label, [data-testid="stSidebar"] span, [data-testid="stSidebar"] p {{
             color: {text_color} !important;
         }}
 
-        /* PIN INPUT & TEXT FIELDS */
+        /* PIN INPUT & TEXT FIELDS (PERBAIKAN UI UX) */
         .stTextInput input {{
             text-align: center; 
             font-size: 32px !important; 
@@ -145,12 +147,15 @@ def inject_custom_css(is_dark_mode):
             border-radius: 12px;
             background-color: {input_bg} !important; 
             color: {text_color} !important; 
-            border: 2px solid {border_color} !important;
+            border: 2px solid {input_border} !important; /* Border lebih tegas */
             box-shadow: 0 4px 6px {shadow};
+            transition: all 0.3s ease;
         }}
         .stTextInput input:focus {{
             border-color: #ff4b4b !important;
+            background-color: {bg_color} !important; /* Efek menyala saat diketik */
             outline: none;
+            box-shadow: 0 0 10px rgba(255, 75, 75, 0.3);
         }}
         
         /* BUTTONS */
@@ -166,26 +171,23 @@ def inject_custom_css(is_dark_mode):
             transition: all 0.2s;
         }}
         .stButton button:hover {{
-            border-color: #ff4b4b;
-            color: #ff4b4b !important;
+            border-color: {btn_hover};
+            color: {btn_hover} !important;
+            background-color: rgba(255, 75, 75, 0.1) !important;
         }}
 
-        /* DROPDOWN / SELECTBOX FIX (PENTING UNTUK LIGHT MODE) */
-        /* Kotak Pilihan */
+        /* DROPDOWN / SELECTBOX FIX */
         div[data-baseweb="select"] > div {{
             background-color: {input_bg} !important;
             color: {text_color} !important;
-            border-color: {border_color} !important;
+            border-color: {input_border} !important;
         }}
-        /* Teks di dalam kotak */
         div[data-baseweb="select"] span {{
             color: {text_color} !important;
         }}
-        /* Menu Pop-up (Saat diklik) */
         ul[data-baseweb="menu"] {{
             background-color: {card_bg} !important;
         }}
-        /* Item Pilihan */
         li[data-baseweb="option"] {{
             color: {text_color} !important;
         }}
@@ -494,45 +496,56 @@ def bandarmology_page(is_dark_mode):
     else: st.info("Silakan pilih data di sidebar.")
 
 def main():
-    # Session & Sidebar harus di-init di awal
-    if 'dark_mode' not in st.session_state:
-        st.session_state['dark_mode'] = True
+    # Session State Init
+    if 'authenticated' not in st.session_state: st.session_state['authenticated'] = False
+    if 'dark_mode' not in st.session_state: st.session_state['dark_mode'] = True
 
-    # SIDEBAR CONTROL
-    if st.session_state['authenticated']:
-        with st.sidebar:
+    # --- INJECT CSS (Panggil di awal agar tidak flickering) ---
+    inject_custom_css(st.session_state['dark_mode'])
+
+    # --- SIDEBAR CONTROL (Berlaku untuk Login & Dashboard) ---
+    with st.sidebar:
+        if st.session_state['authenticated']:
             st.title("🦅 Bandarmology")
-            st.divider()
+        else:
+            st.title("Pengaturan")
             
-            # Toggle Logic
-            is_dark = st.toggle("Dark Mode", value=st.session_state['dark_mode'])
-            if is_dark != st.session_state['dark_mode']:
-                st.session_state['dark_mode'] = is_dark
-                st.rerun()
-                
+        st.divider()
+        
+        # --- LOGIKA TOMBOL SWITCH YANG DIPERBAIKI ---
+        # Kita pakai container agar label teks bisa berubah dinamis
+        mode_icon = "🌙" if st.session_state['dark_mode'] else "☀️"
+        mode_text = "Dark Mode" if st.session_state['dark_mode'] else "Light Mode"
+        
+        c_toggle1, c_toggle2 = st.columns([3, 1])
+        with c_toggle1:
+            st.markdown(f"**{mode_icon} {mode_text}**") # Label dinamis
+        with c_toggle2:
+            # Label disembunyikan, toggle hanya sebagai trigger
+            is_dark = st.toggle("Theme", value=st.session_state['dark_mode'], label_visibility="collapsed")
+
+        if is_dark != st.session_state['dark_mode']:
+            st.session_state['dark_mode'] = is_dark
+            st.rerun()
+            
+        if st.session_state['authenticated']:
+            st.markdown("<br>", unsafe_allow_html=True)
             if st.button("Logout"):
                 st.session_state['authenticated'] = False
                 st.rerun()
+
+    # --- ROUTING HALAMAN ---
+    if st.session_state['authenticated']:
+        # Ticker Global (Optional, uncomment jika butuh)
+        # st.markdown(get_stock_ticker(), unsafe_allow_html=True) 
         
-        # Inject CSS
-        inject_custom_css(st.session_state['dark_mode'])
-        
-        # Ticker Global
-        # st.markdown(get_stock_ticker(), unsafe_allow_html=True) # DIHAPUS SESUAI REQUEST
-        
-        # Main App
         bandarmology_page(st.session_state['dark_mode'])
-        st.markdown(f"<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Mode: {'Dark' if st.session_state['dark_mode'] else 'Light'}</div>", unsafe_allow_html=True)
+        
+        # Footer
+        footer_mode = "Dark" if st.session_state['dark_mode'] else "Light"
+        st.markdown(f"<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Mode: {footer_mode}</div>", unsafe_allow_html=True)
     
     else:
-        # Untuk halaman login, toggle bisa ditaruh di sidebar juga
-        with st.sidebar:
-            st.title("Pengaturan")
-            is_dark_login = st.toggle("Dark Mode", value=st.session_state['dark_mode'])
-            if is_dark_login != st.session_state['dark_mode']:
-                st.session_state['dark_mode'] = is_dark_login
-                st.rerun()
-        
         login_page(st.session_state['dark_mode'])
 
 if __name__ == "__main__":
