@@ -4,9 +4,7 @@ import plotly.graph_objects as go
 import re
 import os
 import requests
-import yfinance as yf
 import streamlit.components.v1 as components 
-from datetime import datetime
 
 # ==========================================
 # 1. KONFIGURASI HALAMAN
@@ -18,7 +16,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- DATABASE BROKER & WARNA ---
+# --- DATABASE BROKER (MAPPING) ---
 BROKER_DB = {
     # ASING (FOREIGN) - HIJAU
     'AK': {'name': 'UBS Sekuritas', 'type': 'Foreign'},
@@ -74,6 +72,7 @@ COLOR_MAP = {
 }
 
 if 'authenticated' not in st.session_state: st.session_state['authenticated'] = False
+# Default Mode: True = Dark, False = Light
 if 'dark_mode' not in st.session_state: st.session_state['dark_mode'] = True
 
 # ==========================================
@@ -93,7 +92,7 @@ def format_number_label(value):
     return f"{value:,.0f}"
 
 def inject_custom_css(is_dark_mode):
-    # Palet Warna Dinamis
+    # Logika Warna Dinamis (Fix Light Mode)
     if is_dark_mode:
         bg_color = "#0e1117"
         sidebar_bg = "#262730"
@@ -102,18 +101,20 @@ def inject_custom_css(is_dark_mode):
         border_color = "#444"
         input_bg = "#262730"
         shadow = "rgba(0,0,0,0.5)"
+        toggle_text = "Switch to Light Mode"
     else:
-        bg_color = "#FFFFFF"
-        sidebar_bg = "#F0F2F6"
-        text_color = "#31333F"
+        bg_color = "#FFFFFF"      # Background Putih Bersih
+        sidebar_bg = "#F8F9FA"    # Sidebar Abu Sangat Muda
+        text_color = "#000000"    # Teks Hitam Pekat
         card_bg = "#FFFFFF"
-        border_color = "#D6D6D6"
+        border_color = "#E0E0E0"
         input_bg = "#FFFFFF"
         shadow = "rgba(0,0,0,0.1)"
+        toggle_text = "Switch to Dark Mode"
 
     st.markdown(f"""
     <style>
-        /* MAIN APP & SIDEBAR */
+        /* MAIN APP & SIDEBAR BACKGROUND */
         .stApp {{
             background-color: {bg_color};
             color: {text_color};
@@ -123,12 +124,13 @@ def inject_custom_css(is_dark_mode):
             border-right: 1px solid {border_color};
         }}
         
-        /* TYPOGRAPHY FIX (Agar terbaca di Light Mode) */
-        h1, h2, h3, h4, h5, h6, p, li, span, label, div {{
-            color: {text_color};
+        /* TYPOGRAPHY FIX - MEMAKSA WARNA TEXT */
+        h1, h2, h3, h4, h5, h6, p, li, span, label, div, .stMarkdown {{
+            color: {text_color} !important;
         }}
-        /* Paksa warna label widget agar kontras */
-        .stMarkdown, .stRadio label, .stSelectbox label, .stSlider label {{
+        
+        /* Sidebar Specific Text Fix */
+        [data-testid="stSidebar"] * {{
             color: {text_color} !important;
         }}
 
@@ -167,35 +169,23 @@ def inject_custom_css(is_dark_mode):
             color: #ff4b4b !important;
         }}
 
-        /* DROPDOWN / SELECTBOX FIX (Masalah background hitam di Light Mode) */
+        /* DROPDOWN / SELECTBOX FIX */
+        /* Kotak Dropdown Utama */
         div[data-baseweb="select"] > div {{
             background-color: {input_bg} !important;
             color: {text_color} !important;
             border-color: {border_color} !important;
         }}
-        /* Dropdown Menu Items (Popover) */
+        /* Text di dalam Dropdown */
+        div[data-baseweb="select"] span {{
+            color: {text_color} !important;
+        }}
+        /* Menu Pop-up (Pilihan) */
         div[data-baseweb="menu"] {{
             background-color: {card_bg} !important;
         }}
         div[data-baseweb="option"] {{
             color: {text_color} !important;
-        }}
-        
-        /* TICKER / MARQUEE */
-        .ticker-wrap {{
-            width: 100%; 
-            background-color: {card_bg}; 
-            padding: 10px 0;
-            border-bottom: 1px solid {border_color}; 
-            position: sticky; top: 0; z-index: 99;
-            box-shadow: 0 2px 5px {shadow};
-        }}
-        .ticker-item {{ 
-            margin: 0 20px; 
-            font-weight: bold; 
-            font-family: monospace; 
-            font-size: 14px;
-            color: {text_color};
         }}
         
         /* TAGS & INSIGHTS */
@@ -209,7 +199,8 @@ def inject_custom_css(is_dark_mode):
             padding: 20px; 
             border-radius: 10px; 
             border-left: 6px solid {COLOR_MAP['Foreign']};
-            margin-top: 20px; margin-bottom: 50px;
+            margin-top: 20px; 
+            margin-bottom: 50px;
             box-shadow: 0 2px 8px {shadow};
             border: 1px solid {border_color};
         }}
@@ -219,51 +210,13 @@ def inject_custom_css(is_dark_mode):
             position: fixed; left: 0; bottom: 0; width: 100%; background: {card_bg};
             text-align: center; padding: 10px; font-size: 11px; 
             border-top: 1px solid {border_color}; z-index: 1000;
-            color: {text_color};
+            color: {text_color} !important;
         }}
     </style>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. KONEKSI DATA (ANTI-BLOKIR)
-# ==========================================
-
-def get_yahoo_session():
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    })
-    return session
-
-@st.cache_data(ttl=120) 
-def get_stock_ticker():
-    tickers = ["BBCA", "BBRI", "BMRI", "BBNI", "TLKM", "ASII", "GOTO", "BUMI", "ADRO", "PGAS"]
-    yf_tickers = [f"{t}.JK" for t in tickers]
-    
-    try:
-        data = yf.download(yf_tickers, period="2d", progress=False, session=get_yahoo_session())['Close']
-        if data.empty: return "<div class='ticker-wrap'>Market Data Offline</div>"
-        
-        last = data.iloc[-1]
-        prev = data.iloc[-2] if len(data) > 1 else last
-        html = ""
-        for t in tickers:
-            tk = f"{t}.JK"
-            try:
-                p_now = last[tk]; p_prev = prev[tk]
-                if pd.isna(p_now): continue
-                chg = p_now - p_prev
-                pct = (chg/p_prev)*100 if p_prev != 0 else 0
-                cls = "#00E396" if chg >= 0 else "#FF4560" # Hardcode color for visibility
-                sgn = "+" if chg >= 0 else ""
-                html += f"<span class='ticker-item'>{t} {int(p_now):,} <span style='color:{cls}'>({sgn}{pct:.2f}%)</span></span>"
-            except: continue
-        return f"<div class='ticker-wrap'><marquee scrollamount='8'>{html}</marquee></div>"
-    except:
-        return "<div class='ticker-wrap'>Connection Limited (Try Refresh)</div>"
-
-# ==========================================
-# 4. DATA PROCESSING
+# 3. DATA PROCESSING LOGIC
 # ==========================================
 
 def clean_running_trade(df_input):
@@ -344,27 +297,45 @@ def build_sankey(df, top_n=15, metric='Value'):
         
     return labels, colors, src, tgt, vals, l_colors
 
-def generate_smart_insight(summary_df):
+def generate_market_insight(summary_df):
     top_buyer = summary_df.iloc[0]
     top_seller = summary_df.iloc[-1]
     
     buyer_code = top_buyer['Code']
-    buyer_val = top_buyer['Net_Val']
+    buyer_net = top_buyer['Net_Val']
     buyer_type = top_buyer['Type']
-    
     seller_code = top_seller['Code']
-    seller_val = abs(top_seller['Net_Val'])
+    seller_net = abs(top_seller['Net_Val'])
     
-    action = "AKUMULASI" if buyer_val > (seller_val * 1.2) else "DISTRIBUSI" if seller_val > (buyer_val * 1.2) else "NETRAL"
-    
-    return f"""
-    ### 🧠 AI Insight: {action}
-    **Top Buyer:** {top_buyer['Code']} ({top_buyer['Type']}) - Net Buy: Rp {format_number_label(top_buyer['Net_Val'])}
-    **Top Seller:** {top_seller['Code']} ({top_seller['Type']}) - Net Sell: Rp {format_number_label(abs(top_seller['Net_Val']))}
+    if buyer_net > (seller_net * 1.5):
+        status = "🔥 AKUMULASI KUAT"
+        tone = "positive"
+    elif seller_net > (buyer_net * 1.5):
+        status = "⚠️ DISTRIBUSI MASIF"
+        tone = "negative"
+    else:
+        status = "⚖️ NETRAL / TUKAR BARANG"
+        tone = "neutral"
+        
+    if tone == "positive":
+        msg = f"Buyer ({buyer_code}) mendominasi dengan pembelian bersih signifikan. Sinyal positif jika harga belum naik tinggi."
+    elif tone == "negative":
+        msg = f"Seller ({seller_code}) melakukan penjualan agresif. Waspadai tekanan jual lanjutan."
+    else:
+        msg = "Kekuatan pembeli dan penjual relatif seimbang. Pasar sedang mencari arah."
+
+    insight_html = f"""
+    <div class='insight-title'>{status}</div>
+    <div class='insight-text'>
+    <b>Top Buyer:</b> {buyer_code} ({buyer_type}) - Net: Rp {format_number_label(buyer_net)}<br>
+    <b>Top Seller:</b> {seller_code} ({top_seller['Type']}) - Net: Rp {format_number_label(seller_net)}<br>
+    <br><b>Analisis Singkat:</b><br>{msg}
+    </div>
     """
+    return insight_html
 
 # ==========================================
-# 5. UI PAGES
+# 4. UI PAGES & MAIN
 # ==========================================
 
 def login_page(is_dark_mode):
@@ -386,10 +357,9 @@ def login_page(is_dark_mode):
                 else: st.error("Wrong PIN")
 
 def bandarmology_page(is_dark_mode):
-    # CSS di-inject di sini agar responsif terhadap perubahan data
     inject_custom_css(is_dark_mode)
-    
     DB_ROOT = "database"
+    
     with st.sidebar:
         st.subheader("📂 Sumber Data")
         source_type = st.radio("Tipe:", ["Database Folder", "Upload Manual"], label_visibility="collapsed")
@@ -443,6 +413,7 @@ def bandarmology_page(is_dark_mode):
             st.divider()
             
             st.subheader("🏆 Top Broker")
+            # PEWARNAAN TABEL
             def color_net(val):
                 return f'color: {"#00E396" if val>0 else "#FF4560"}; font-weight: bold;'
 
@@ -452,7 +423,6 @@ def bandarmology_page(is_dark_mode):
                 with tab:
                     d = summ if cat == 'All' else summ[summ['Type']==cat]
                     if not d.empty:
-                        # Styling Tabel yang Aman
                         st.dataframe(d[['Code','Name','Total_Val','Net_Val']].style.format({
                             'Total_Val': format_number_label, 'Net_Val': format_number_label
                         }).map(color_net, subset=['Net_Val']), use_container_width=True, height=350)
@@ -473,56 +443,44 @@ def bandarmology_page(is_dark_mode):
                     link=dict(source=src, target=tgt, value=val, color=l_col)
                 )])
                 
-                # Plotly Font Color Adjustment
-                plot_font = "white" if is_dark_mode else "black"
+                # Adjust Plotly font color based on theme
+                font_col = "white" if is_dark_mode else "black"
                 fig.update_layout(
                     height=600, 
                     margin=dict(l=10,r=10,t=10,b=10), 
-                    font=dict(size=12, color=plot_font),
+                    font=dict(size=12, color=font_col),
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)'
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
                 st.markdown(f"""<div style='text-align:center'><span class='tag tag-Foreign'>ASING</span><span class='tag tag-BUMN'>BUMN</span><span class='tag tag-Local'>LOKAL</span></div>""", unsafe_allow_html=True)
-                st.markdown(f"<div class='insight-box'>{generate_smart_insight(summ)}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='insight-box'>{generate_market_insight(summ)}</div>", unsafe_allow_html=True)
             except Exception as e: st.warning(f"Error Visual: {e}")
             
         except Exception as e: st.error(f"Error: {e}")
     else: st.info("Silakan pilih data di sidebar.")
 
 def main():
-    # Session state handling untuk Dark Mode harus di awal
-    if 'dark_mode' not in st.session_state:
-        st.session_state['dark_mode'] = True
-
+    # SIDEBAR CONTROLS
+    with st.sidebar:
+        st.title("🦅 Bandarmology")
+        st.divider()
+        # Toggle langsung update session state
+        is_dark = st.toggle("Dark Mode", value=st.session_state['dark_mode'])
+        st.session_state['dark_mode'] = is_dark
+        if st.button("Logout"):
+            st.session_state['authenticated'] = False
+            st.rerun()
+            
+    # Inject CSS
+    inject_custom_css(st.session_state['dark_mode'])
+    
     if st.session_state['authenticated']:
-        # Control Panel Sidebar
-        with st.sidebar:
-            st.title("🦅 Bandarmology")
-            st.divider()
-            
-            # Toggle langsung update session state
-            is_dark = st.toggle("Dark Mode", value=st.session_state['dark_mode'])
-            st.session_state['dark_mode'] = is_dark # Force update state
-            
-            if st.button("Logout"):
-                st.session_state['authenticated'] = False
-                st.rerun()
-        
-        # Inject CSS sebelum konten dirender
-        inject_custom_css(st.session_state['dark_mode'])
-        
-        # Ticker Global
-        st.markdown(get_stock_ticker(), unsafe_allow_html=True)
-        
-        # Main App
         bandarmology_page(st.session_state['dark_mode'])
-        st.markdown(f"<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Mode: {'Dark' if st.session_state['dark_mode'] else 'Light'}</div>", unsafe_allow_html=True)
-        
+        st.markdown(f"<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Mode: {'Dark' if is_dark else 'Light'}</div>", unsafe_allow_html=True)
     else:
-        # Halaman Login juga butuh toggle (opsional) atau default dark
-        login_page(True)
+        login_page(is_dark)
 
 if __name__ == "__main__":
     main()
