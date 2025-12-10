@@ -71,11 +71,8 @@ COLOR_MAP = {
     'Unknown': '#546E7A'  
 }
 
-if 'authenticated' not in st.session_state: st.session_state['authenticated'] = False
-if 'dark_mode' not in st.session_state: st.session_state['dark_mode'] = True
-
 # ==========================================
-# 2. HELPER & STYLING (FIX UI/UX)
+# 2. HELPER & STYLING (FIX UI/UX TOTAL)
 # ==========================================
 
 def get_broker_info(code):
@@ -91,53 +88,59 @@ def format_number_label(value):
     return f"{value:,.0f}"
 
 def inject_custom_css(is_dark_mode):
-    # --- PALET WARNA (DIPERBAIKI UNTUK KONTRAS) ---
+    # --- LOGIKA WARNA (Perbaikan Kontras Light vs Dark) ---
     if is_dark_mode:
         bg_color = "#0e1117"
         sidebar_bg = "#262730"
         text_color = "#ffffff"
         card_bg = "#1E1E1E"
         border_color = "#444444"
+        
+        # UI Input (Dark Mode)
         input_bg = "#262730"
         input_border = "#555555"
+        
         shadow = "rgba(0,0,0,0.5)"
         btn_hover = "#ff4b4b"
     else:
-        bg_color = "#FFFFFF"         # Background Putih Bersih
-        sidebar_bg = "#F0F2F6"       # Sidebar Abu-abu Muda (Standar Streamlit)
-        text_color = "#000000"       # Teks Hitam Pekat
+        bg_color = "#FFFFFF"         
+        sidebar_bg = "#F0F2F6"       # Warna standar sidebar light Streamlit
+        text_color = "#000000"       # Hitam Pekat
         card_bg = "#FFFFFF"
-        border_color = "#D1D1D1"
-        input_bg = "#E8E8E8"         # Input agak abu-abu agar terlihat beda dari background
-        input_border = "#333333"     # Border gelap agar kotak PIN tegas
+        border_color = "#E0E0E0"
+        
+        # UI Input (Light Mode - FIX UTAMA)
+        input_bg = "#FFFFFF"         # Putih bersih agar clean
+        input_border = "#31333F"     # Border gelap agar kotak terlihat tegas
+        
         shadow = "rgba(0,0,0,0.1)"
         btn_hover = "#ff4b4b"
 
     st.markdown(f"""
     <style>
-        /* MAIN APP */
+        /* --- GLOBAL BACKGROUND & TEXT --- */
         .stApp {{
             background-color: {bg_color};
             color: {text_color};
         }}
         
-        /* SIDEBAR */
-        section[data-testid="stSidebar"] {{
+        /* --- SIDEBAR --- */
+        [data-testid="stSidebar"] {{
             background-color: {sidebar_bg} !important;
             border-right: 1px solid {border_color};
         }}
         
-        /* MEMAKSA SEMUA TEKS JADI SESUAI TEMA (PENTING UNTUK LIGHT MODE) */
+        /* FIX: Memaksa semua teks penting mengikuti tema warna */
         h1, h2, h3, h4, h5, h6, p, li, span, label, div, .stMarkdown, .stText {{
             color: {text_color} !important;
         }}
         
-        /* KHUSUS LABEL DI SIDEBAR (Agar Toggle terlihat) */
-        [data-testid="stSidebar"] label, [data-testid="stSidebar"] span, [data-testid="stSidebar"] p {{
+        /* FIX: Memastikan teks di Sidebar (Radio, Checkbox) terlihat di Light Mode */
+        [data-testid="stSidebar"] label, [data-testid="stSidebar"] span, [data-testid="stSidebar"] p, [data-testid="stSidebar"] div {{
             color: {text_color} !important;
         }}
 
-        /* PIN INPUT & TEXT FIELDS (PERBAIKAN UI UX) */
+        /* --- PIN INPUT STYLE (DIPERBAIKI) --- */
         .stTextInput input {{
             text-align: center; 
             font-size: 32px !important; 
@@ -145,20 +148,24 @@ def inject_custom_css(is_dark_mode):
             font-weight: bold; 
             padding: 15px; 
             border-radius: 12px;
+            
+            /* Warna Dinamis */
             background-color: {input_bg} !important; 
             color: {text_color} !important; 
-            border: 2px solid {input_border} !important; /* Border lebih tegas */
+            border: 2px solid {input_border} !important;
+            
             box-shadow: 0 4px 6px {shadow};
             transition: all 0.3s ease;
         }}
+        
+        /* Efek saat diketik */
         .stTextInput input:focus {{
             border-color: #ff4b4b !important;
-            background-color: {bg_color} !important; /* Efek menyala saat diketik */
             outline: none;
-            box-shadow: 0 0 10px rgba(255, 75, 75, 0.3);
+            box-shadow: 0 0 8px rgba(255, 75, 75, 0.4);
         }}
         
-        /* BUTTONS */
+        /* --- BUTTON STYLE --- */
         .stButton button {{ 
             width: 100%; 
             height: 50px; 
@@ -176,58 +183,40 @@ def inject_custom_css(is_dark_mode):
             background-color: rgba(255, 75, 75, 0.1) !important;
         }}
 
-        /* DROPDOWN / SELECTBOX FIX */
+        /* --- SELECTBOX / DROPDOWN FIX --- */
         div[data-baseweb="select"] > div {{
             background-color: {input_bg} !important;
             color: {text_color} !important;
             border-color: {input_border} !important;
         }}
+        /* Warna teks dropdown saat dipilih */
         div[data-baseweb="select"] span {{
             color: {text_color} !important;
         }}
+        /* Menu Pop-up dropdown */
         ul[data-baseweb="menu"] {{
             background-color: {card_bg} !important;
         }}
-        li[data-baseweb="option"] {{
-            color: {text_color} !important;
-        }}
         
-        /* TICKER / MARQUEE */
+        /* --- EXTRAS (Ticker, Insight, Footer) --- */
         .ticker-wrap {{
-            width: 100%; 
-            background-color: {card_bg}; 
-            padding: 10px 0;
+            width: 100%; background-color: {card_bg}; padding: 10px 0;
             border-bottom: 1px solid {border_color}; 
-            position: sticky; top: 0; z-index: 99;
-            box-shadow: 0 2px 5px {shadow};
+            position: sticky; top: 0; z-index: 99; box-shadow: 0 2px 5px {shadow};
         }}
-        .ticker-item {{ 
-            margin: 0 20px; 
-            font-weight: bold; 
-            font-family: monospace; 
-            font-size: 14px;
-            color: {text_color};
-        }}
+        .ticker-item {{ margin: 0 20px; font-weight: bold; font-family: monospace; font-size: 14px; color: {text_color}; }}
         
-        /* TAGS & INSIGHTS */
         .tag {{ padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; color: white !important; display: inline-block; margin-right: 5px;}}
         .tag-Foreign {{ background-color: {COLOR_MAP['Foreign']}; }}
         .tag-BUMN {{ background-color: {COLOR_MAP['BUMN']}; color: black !important; }}
         .tag-Local {{ background-color: {COLOR_MAP['Local']}; }}
         
         .insight-box {{
-            background-color: {card_bg}; 
-            padding: 20px; 
-            border-radius: 10px; 
-            border-left: 6px solid {COLOR_MAP['Foreign']};
-            margin-top: 20px; 
-            margin-bottom: 50px;
-            box-shadow: 0 2px 8px {shadow};
-            border: 1px solid {border_color};
+            background-color: {card_bg}; padding: 20px; border-radius: 10px; 
+            border-left: 6px solid {COLOR_MAP['Foreign']}; margin-top: 20px; margin-bottom: 50px;
+            box-shadow: 0 2px 8px {shadow}; border: 1px solid {border_color};
         }}
-        .insight-text {{ color: {text_color} !important; }}
         
-        /* FOOTER */
         .footer {{
             position: fixed; left: 0; bottom: 0; width: 100%; background: {card_bg};
             text-align: center; padding: 10px; font-size: 11px; 
@@ -238,7 +227,7 @@ def inject_custom_css(is_dark_mode):
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. KONEKSI DATA (ANTI-BLOKIR)
+# 3. KONEKSI DATA & PROSES
 # ==========================================
 
 def get_yahoo_session():
@@ -247,37 +236,6 @@ def get_yahoo_session():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     })
     return session
-
-@st.cache_data(ttl=120) 
-def get_stock_ticker():
-    tickers = ["BBCA", "BBRI", "BMRI", "BBNI", "TLKM", "ASII", "GOTO", "BUMI", "ADRO", "PGAS"]
-    yf_tickers = [f"{t}.JK" for t in tickers]
-    
-    try:
-        data = yf.download(yf_tickers, period="2d", progress=False, session=get_yahoo_session())['Close']
-        if data.empty: return "<div class='ticker-wrap'>Market Data Offline</div>"
-        
-        last = data.iloc[-1]
-        prev = data.iloc[-2] if len(data) > 1 else last
-        html = ""
-        for t in tickers:
-            tk = f"{t}.JK"
-            try:
-                p_now = last[tk]; p_prev = prev[tk]
-                if pd.isna(p_now): continue
-                chg = p_now - p_prev
-                pct = (chg/p_prev)*100 if p_prev != 0 else 0
-                cls = "#00E396" if chg >= 0 else "#FF4560" 
-                sgn = "+" if chg >= 0 else ""
-                html += f"<span class='ticker-item'>{t} {int(p_now):,} <span style='color:{cls}'>({sgn}{pct:.2f}%)</span></span>"
-            except: continue
-        return f"<div class='ticker-wrap'><marquee scrollamount='8'>{html}</marquee></div>"
-    except:
-        return "<div class='ticker-wrap'>Connection Limited (Try Refresh)</div>"
-
-# ==========================================
-# 4. DATA PROCESSING
-# ==========================================
 
 def clean_running_trade(df_input):
     df = df_input.copy()
@@ -370,11 +328,11 @@ def generate_smart_insight(summary_df):
     """
 
 # ==========================================
-# 5. UI PAGES
+# 4. HALAMAN UI
 # ==========================================
 
 def login_page(is_dark_mode):
-    inject_custom_css(is_dark_mode)
+    # CSS sudah diinject di main, kita hanya render HTML
     components.html("""<script>
     const i=window.parent.document.querySelectorAll('input[type="password"]');
     i.forEach(e=>{e.setAttribute('inputmode','numeric');e.setAttribute('pattern','[0-9]*');});
@@ -382,8 +340,9 @@ def login_page(is_dark_mode):
     
     c1, c2, c3 = st.columns([1,2,1])
     with c2:
-        st.markdown("<br><h1 style='text-align:center'>🔒 SECURE ACCESS</h1>", unsafe_allow_html=True)
+        st.markdown("<br><br><h1 style='text-align:center'>🔒 SECURE ACCESS</h1>", unsafe_allow_html=True)
         with st.form("login"):
+            # Label visibility collapsed agar tidak double text
             pin = st.text_input("PIN", type="password", placeholder="• • • • • •", label_visibility="collapsed")
             if st.form_submit_button("UNLOCK"):
                 if pin == "241130":
@@ -392,7 +351,6 @@ def login_page(is_dark_mode):
                 else: st.error("Wrong PIN")
 
 def bandarmology_page(is_dark_mode):
-    inject_custom_css(is_dark_mode)
     DB_ROOT = "database"
     
     with st.sidebar:
@@ -477,7 +435,7 @@ def bandarmology_page(is_dark_mode):
                     link=dict(source=src, target=tgt, value=val, color=l_col)
                 )])
                 
-                # Adjust Plotly font color based on theme
+                # Font color plot harus menyesuaikan tema juga
                 font_col = "white" if is_dark_mode else "black"
                 fig.update_layout(
                     height=600, 
@@ -496,54 +454,50 @@ def bandarmology_page(is_dark_mode):
     else: st.info("Silakan pilih data di sidebar.")
 
 def main():
-    # Session State Init
     if 'authenticated' not in st.session_state: st.session_state['authenticated'] = False
     if 'dark_mode' not in st.session_state: st.session_state['dark_mode'] = True
 
-    # --- INJECT CSS (Panggil di awal agar tidak flickering) ---
+    # 1. Inject CSS di awal
     inject_custom_css(st.session_state['dark_mode'])
 
-    # --- SIDEBAR CONTROL (Berlaku untuk Login & Dashboard) ---
+    # 2. Sidebar Control
     with st.sidebar:
         if st.session_state['authenticated']:
             st.title("🦅 Bandarmology")
         else:
             st.title("Pengaturan")
-            
+        
         st.divider()
         
-        # --- LOGIKA TOMBOL SWITCH YANG DIPERBAIKI ---
-        # Kita pakai container agar label teks bisa berubah dinamis
-        mode_icon = "🌙" if st.session_state['dark_mode'] else "☀️"
-        mode_text = "Dark Mode" if st.session_state['dark_mode'] else "Light Mode"
-        
+        # --- CUSTOM TOGGLE SWITCH UI ---
+        # Menggunakan kolom agar Label Dinamis dan Switch sejajar
         c_toggle1, c_toggle2 = st.columns([3, 1])
+        
+        mode_label = "**🌙 Dark Mode**" if st.session_state['dark_mode'] else "**☀️ Light Mode**"
+        
         with c_toggle1:
-            st.markdown(f"**{mode_icon} {mode_text}**") # Label dinamis
+            st.markdown(f"<div style='padding-top:5px'>{mode_label}</div>", unsafe_allow_html=True)
+            
         with c_toggle2:
-            # Label disembunyikan, toggle hanya sebagai trigger
+            # Label visibility collapsed, kita pakai custom text di sebelah kiri
             is_dark = st.toggle("Theme", value=st.session_state['dark_mode'], label_visibility="collapsed")
-
+            
         if is_dark != st.session_state['dark_mode']:
             st.session_state['dark_mode'] = is_dark
             st.rerun()
-            
+
         if st.session_state['authenticated']:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("Logout"):
                 st.session_state['authenticated'] = False
                 st.rerun()
 
-    # --- ROUTING HALAMAN ---
+    # 3. Halaman Utama / Login
     if st.session_state['authenticated']:
-        # Ticker Global (Optional, uncomment jika butuh)
-        # st.markdown(get_stock_ticker(), unsafe_allow_html=True) 
-        
         bandarmology_page(st.session_state['dark_mode'])
         
-        # Footer
-        footer_mode = "Dark" if st.session_state['dark_mode'] else "Light"
-        st.markdown(f"<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Mode: {footer_mode}</div>", unsafe_allow_html=True)
+        f_mode = "Dark" if st.session_state['dark_mode'] else "Light"
+        st.markdown(f"<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Mode: {f_mode}</div>", unsafe_allow_html=True)
     
     else:
         login_page(st.session_state['dark_mode'])
