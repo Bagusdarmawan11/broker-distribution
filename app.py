@@ -101,8 +101,8 @@ def format_number_label(value):
 def inject_custom_css(is_dark_mode: bool) -> None:
     """
     Styling custom:
-    - Light mode benar-benar terang (header hitam default dihilangkan)
-    - Login & konten utama pakai card yang rapi
+    - Light mode benar-benar terang
+    - Toggle switch dibuat jelas di sidebar (light & dark)
     """
     if is_dark_mode:
         bg_color = "#0e1117"
@@ -116,6 +116,9 @@ def inject_custom_css(is_dark_mode: bool) -> None:
 
         shadow = "rgba(0,0,0,0.5)"
         btn_hover = "#ff4b4b"
+
+        toggle_track = "#111827"
+        toggle_border = "#4B5563"
     else:
         bg_color = "#FFFFFF"
         sidebar_bg = "#F8F9FA"
@@ -128,6 +131,9 @@ def inject_custom_css(is_dark_mode: bool) -> None:
 
         shadow = "rgba(0,0,0,0.12)"
         btn_hover = "#ff4b4b"
+
+        toggle_track = "#E5E7EB"
+        toggle_border = "#9CA3AF"
 
     st.markdown(
         f"""
@@ -258,6 +264,23 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             border-color: {btn_hover};
             color: {btn_hover} !important;
             background-color: rgba(255, 75, 75, 0.12) !important;
+        }}
+
+        /* TOGGLE (st.toggle) — BIAR KELIATAN JELAS DI LIGHT MODE */
+        [data-testid="stSidebar"] [role="switch"] {{
+            background-color: {toggle_track} !important;
+            border-radius: 999px;
+            border: 1px solid {toggle_border};
+            box-shadow: 0 0 0 1px rgba(0,0,0,0.04);
+            min-width: 46px;
+            min-height: 24px;
+            cursor: pointer;
+        }}
+        /* Saat aktif (ON) */
+        [data-testid="stSidebar"] [role="switch"][aria-checked="true"] {{
+            background-color: #10B981 !important;
+            border-color: #059669;
+            box-shadow: 0 0 0 1px rgba(16,185,129,0.3);
         }}
 
         /* METRIC CARD */
@@ -558,15 +581,15 @@ def generate_smart_insight(summary_df: pd.DataFrame) -> str:
 def login_page(is_dark_mode: bool) -> None:
     inject_custom_css(is_dark_mode)
 
-    # paksa keyboard numeric di mobile
+    # Paksa keyboard numeric di mobile
     components.html(
         """
         <script>
         const i = window.parent.document.querySelectorAll('input[type="password"]');
-        i.forEach(e => {{
+        i.forEach(e => {
             e.setAttribute('inputmode','numeric');
             e.setAttribute('pattern','[0-9]*');
-        }});
+        });
         </script>
         """,
         height=0,
@@ -809,7 +832,7 @@ def bandarmology_page(is_dark_mode: bool) -> None:
         except Exception as e:
             st.error(f"Terjadi error saat memproses data: {e}")
     else:
-        # Empty state yang lebih manis daripada st.info biasa
+        # Empty state yang lebih manis
         st.markdown(
             """
             <div class="empty-state">
