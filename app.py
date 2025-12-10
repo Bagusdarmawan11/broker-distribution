@@ -8,7 +8,6 @@ import os
 import yfinance as yf
 import streamlit.components.v1 as components 
 from datetime import datetime
-from tvdatafeed import TvDatafeed, Interval
 
 # ==========================================
 # 1. KONFIGURASI & DATABASE BROKER
@@ -19,12 +18,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# Inisialisasi TradingView (Tanpa Login - Mode Anonymous)
-try:
-    tv = TvDatafeed()
-except:
-    tv = None
 
 # --- DATABASE BROKER (MAPPING) ---
 BROKER_DB = {
@@ -148,7 +141,7 @@ def inject_custom_css():
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. LIVE MARKET DATA (HYBRID ENGINE)
+# 3. LIVE MARKET DATA (YAHOO ONLY)
 # ==========================================
 
 @st.cache_data(ttl=60) # Update tiap 60 detik
@@ -185,12 +178,6 @@ def get_stock_ticker():
 
 @st.cache_data(ttl=300)
 def get_stock_details(symbol):
-    """
-    HYBRID SYSTEM: Coba Yahoo Finance, jika gagal fallback ke TradingView (TvDatafeed)
-    """
-    symbol = symbol.upper()
-    
-    # 1. COBA YAHOO FINANCE
     try:
         ticker = yf.Ticker(f"{symbol}.JK")
         hist = ticker.history(period="1d")
@@ -210,28 +197,7 @@ def get_stock_details(symbol):
                 'Revenue': info.get('totalRevenue', 0),
                 'Profit': info.get('grossProfits', 0)
             }
-    except Exception as e:
-        print(f"Yahoo Fail: {e}")
-
-    # 2. FALLBACK: TRADINGVIEW (TVDATAFEED)
-    if tv:
-        try:
-            # Exchange IDX
-            df_tv = tv.get_hist(symbol=symbol, exchange='IDX', interval=Interval.in_daily, n_bars=1)
-            if df_tv is not None and not df_tv.empty:
-                curr_tv = df_tv.iloc[-1]
-                return {
-                    'Source': 'TradingView (Live)',
-                    'Open': curr_tv['open'], 'High': curr_tv['high'],
-                    'Low': curr_tv['low'], 'Close': curr_tv['close'],
-                    'Volume': curr_tv['volume'],
-                    'Value_Est': curr_tv['close'] * curr_tv['volume'],
-                    # Fundamental Data tidak tersedia di free TVDatafeed
-                    'MarketCap': 0, 'PE': 0, 'EPS': 0, 'Revenue': 0, 'Profit': 0
-                }
-        except Exception as e:
-            print(f"TV Fail: {e}")
-            
+    except: return None
     return None
 
 # ==========================================
@@ -289,22 +255,27 @@ def get_broker_summary(df):
     return summ.sort_values('Net_Val', ascending=False)
 
 def build_sankey(df, top_n=15, metric='Value'):
+    # Grouping
     flow = df.groupby(['Buyer_Code', 'Seller_Code'])[metric].sum().reset_index()
     flow = flow.sort_values(metric, ascending=False).head(top_n)
     
+    # Labeling
     flow['B_Label'] = flow['Buyer_Code'] + " (B)"
     flow['S_Label'] = flow['Seller_Code'] + " (S)"
     
     all_nodes = list(set(flow['B_Label']).union(set(flow['S_Label'])))
     node_map = {k: v for v, k in enumerate(all_nodes)}
     
+    # Totals for Labels
     b_totals = flow.groupby('B_Label')[metric].sum()
     s_totals = flow.groupby('S_Label')[metric].sum()
     
     labels, colors = [], []
     
     for node in all_nodes:
-        code = node.split()[0]
+        # Extract Broker Code
+        code = node.split()[0] 
+        # Get Type -> Get Color
         b_type = get_broker_info(code)[2]
         color = COLOR_MAP.get(b_type, '#888')
         
@@ -321,6 +292,7 @@ def build_sankey(df, top_n=15, metric='Value'):
     tgt = [node_map[x] for x in flow['S_Label']]
     vals = flow[metric].tolist()
     
+    # Link Colors
     l_colors = []
     for s_idx in src:
         c_hex = colors[s_idx].lstrip('#')
@@ -394,10 +366,8 @@ def market_intelligence_page():
             data = get_stock_details(symbol)
             
         if data:
-            # Source indicator
-            st.caption(f"Data Source: {data.get('Source', 'Unknown')}")
+            st.caption(f"Data Source: {data.get('Source', 'Yahoo Finance')}")
             
-            # Main Metrics
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Close", f"Rp {data['Close']:,.0f}")
             m2.metric("Open", f"Rp {data['Open']:,.0f}")
@@ -406,11 +376,9 @@ def market_intelligence_page():
             
             st.divider()
             
-            # Chart & Financials
             t1, t2 = st.tabs(["📈 Chart & Trend", "💰 Financial Insight"])
             
             with t1:
-                # Charting fallback
                 try:
                     ticker = yf.Ticker(f"{symbol}.JK")
                     hist = ticker.history(period="3mo")
@@ -425,12 +393,12 @@ def market_intelligence_page():
                 except: st.warning("Chart Error.")
                 
             with t2:
-                if data['MarketCap'] > 0: # Only show if data valid
+                if data.get('MarketCap', 0) > 0:
                     f1, f2 = st.columns(2)
                     with f1:
                         st.subheader("Revenue vs Earnings")
-                        rev = data['Revenue']
-                        earn = data['Profit']
+                        rev = data.get('Revenue', 0)
+                        earn = data.get('Profit', 0)
                         fig_fin = go.Figure(data=[
                             go.Bar(name='Revenue', x=['TTM'], y=[rev], marker_color='#00E396'),
                             go.Bar(name='Gross Profit', x=['TTM'], y=[earn], marker_color='#775DD0')
@@ -441,15 +409,14 @@ def market_intelligence_page():
                         st.subheader("Fundamental Key")
                         st.dataframe(pd.DataFrame({
                             'Metric': ['Market Cap', 'PE Ratio', 'EPS'],
-                            'Value': [format_number_label(data['MarketCap']), f"{data['PE']:.2f}x", f"{data['EPS']:.2f}"]
+                            'Value': [format_number_label(data.get('MarketCap', 0)), f"{data.get('PE',0):.2f}x", f"{data.get('EPS',0):.2f}"]
                         }), hide_index=True, use_container_width=True)
                 else:
-                    st.info("Data Fundamental tidak tersedia untuk sumber data ini (TradingView Fallback).")
+                    st.info("Data Fundamental tidak tersedia.")
         else:
-            st.error("Saham tidak ditemukan atau koneksi bermasalah di kedua server (Yahoo & TradingView).")
+            st.error("Saham tidak ditemukan atau koneksi bermasalah.")
 
 def bandarmology_page():
-    # DIRECTORY HANDLING
     DB_ROOT = "database"
     
     with st.sidebar:
@@ -492,7 +459,6 @@ def bandarmology_page():
                     current_stock = "UPLOADED"
                 except: st.error("Format File Salah")
 
-    # MAIN ANALYSIS
     if df_raw is not None:
         try:
             df = clean_running_trade(df_raw)
@@ -500,7 +466,6 @@ def bandarmology_page():
             
             st.title(f"📊 Analisis Broker: {current_stock}")
             
-            # --- SUMMARY STATS ---
             tot_val = df['Value'].sum()
             f_share = summ[summ['Type']=='Foreign']['Total_Val'].sum() / (tot_val*2) * 100
             
@@ -511,12 +476,12 @@ def bandarmology_page():
             
             st.divider()
             
-            # --- TOP BROKER TABLE ---
             st.subheader("🏆 Top Broker Summary")
             
-            def color_row(row):
-                color = '#00E396' if row['Net_Val'] > 0 else '#FF4560'
-                return [f'color: {color}; font-weight: bold' if col == 'Net_Val' else '' for col in row.index]
+            # --- FIX: Apply Map for Styling in Streamlit ---
+            def color_net_val(val):
+                color = '#00E396' if val > 0 else '#FF4560'
+                return f'color: {color}; font-weight: bold'
 
             tabs = st.tabs(["ALL", "ASING", "BUMN", "LOKAL"])
             categories = ['All', 'Foreign', 'BUMN', 'Local']
@@ -526,17 +491,17 @@ def bandarmology_page():
                     data = summ if cat == 'All' else summ[summ['Type'] == cat]
                     if not data.empty:
                         show = data[['Code', 'Name', 'Total_Val', 'Net_Val']].copy()
+                        # Use map instead of applymap for newer pandas versions
                         st.dataframe(
                             show.style.format({
                                 'Total_Val': format_number_label, 
                                 'Net_Val': format_number_label
-                            }).applymap(lambda v: f'color: {"#00E396" if v>0 else "#FF4560"}', subset=['Net_Val']),
+                            }).map(color_net_val, subset=['Net_Val']),
                             use_container_width=True, height=350,
                             column_config={"Code": "Kode", "Name": "Sekuritas", "Total_Val": "Total Value", "Net_Val": "Net Buy/Sell"}
                         )
                     else: st.info("Data Kosong")
             
-            # --- SANKEY VISUALIZATION ---
             st.subheader("🕸️ Peta Aliran Dana (Broker Flow)")
             
             sc1, sc2 = st.columns([2,1])
