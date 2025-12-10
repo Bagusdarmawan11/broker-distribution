@@ -78,7 +78,7 @@ if 'dark_mode' not in st.session_state:
 
 
 # ==========================================
-# 2. HELPER & STYLING (FIX UI/UX TOTAL)
+# 2. HELPER & STYLING
 # ==========================================
 
 def get_broker_info(code):
@@ -99,11 +99,6 @@ def format_number_label(value):
 
 
 def inject_custom_css(is_dark_mode: bool) -> None:
-    """
-    Styling custom:
-    - Light mode benar-benar terang
-    - Toggle switch dibuat jelas di sidebar (light & dark)
-    """
     if is_dark_mode:
         bg_color = "#0e1117"
         sidebar_bg = "#262730"
@@ -116,9 +111,6 @@ def inject_custom_css(is_dark_mode: bool) -> None:
 
         shadow = "rgba(0,0,0,0.5)"
         btn_hover = "#ff4b4b"
-
-        toggle_track = "#111827"
-        toggle_border = "#4B5563"
     else:
         bg_color = "#FFFFFF"
         sidebar_bg = "#F8F9FA"
@@ -132,13 +124,9 @@ def inject_custom_css(is_dark_mode: bool) -> None:
         shadow = "rgba(0,0,0,0.12)"
         btn_hover = "#ff4b4b"
 
-        toggle_track = "#E5E7EB"
-        toggle_border = "#9CA3AF"
-
     st.markdown(
         f"""
         <style>
-        /* ========== GLOBAL LAYOUT ========== */
         .stApp {{
             background-color: {bg_color};
             color: {text_color};
@@ -157,7 +145,6 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             padding-bottom: 4.5rem;
         }}
 
-        /* SIDEBAR */
         [data-testid="stSidebar"] {{
             background-color: {sidebar_bg} !important;
             border-right: 1px solid {border_color};
@@ -166,20 +153,14 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             color: {text_color} !important;
         }}
 
-        /* TIPOGRAFI */
         h1, h2, h3, h4, h5, h6,
         p, li, span, label, div, .stMarkdown, .stText {{
             color: {text_color} !important;
         }}
 
-        a {{
-            color: #4c8df5 !important;
-        }}
-        a:hover {{
-            text-decoration: underline;
-        }}
+        a {{ color: #4c8df5 !important; }}
+        a:hover {{ text-decoration: underline; }}
 
-        /* CARD GENERIC */
         .app-card {{
             background-color: {card_bg};
             border-radius: 18px;
@@ -204,7 +185,6 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             font-size: 0.9rem;
         }}
 
-        /* INPUT PIN */
         .stTextInput input {{
             text-align: center;
             font-size: 32px !important;
@@ -212,11 +192,9 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             font-weight: bold;
             padding: 14px 18px;
             border-radius: 12px;
-
             background-color: {input_bg} !important;
             color: {text_color} !important;
             border: 2px solid {input_border} !important;
-
             box-shadow: 0 4px 10px {shadow};
             transition: all 0.25s ease;
         }}
@@ -229,7 +207,6 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             box-shadow: 0 0 8px rgba(255, 75, 75, 0.45);
         }}
 
-        /* SELECTBOX */
         div[data-baseweb="select"] > div {{
             background-color: {input_bg} !important;
             color: {text_color} !important;
@@ -248,7 +225,6 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             color: {text_color} !important;
         }}
 
-        /* BUTTON */
         .stButton button {{
             width: 100%;
             height: 46px;
@@ -266,24 +242,6 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             background-color: rgba(255, 75, 75, 0.12) !important;
         }}
 
-        /* TOGGLE (st.toggle) — BIAR KELIATAN JELAS DI LIGHT MODE */
-        [data-testid="stSidebar"] [role="switch"] {{
-            background-color: {toggle_track} !important;
-            border-radius: 999px;
-            border: 1px solid {toggle_border};
-            box-shadow: 0 0 0 1px rgba(0,0,0,0.04);
-            min-width: 46px;
-            min-height: 24px;
-            cursor: pointer;
-        }}
-        /* Saat aktif (ON) */
-        [data-testid="stSidebar"] [role="switch"][aria-checked="true"] {{
-            background-color: #10B981 !important;
-            border-color: #059669;
-            box-shadow: 0 0 0 1px rgba(16,185,129,0.3);
-        }}
-
-        /* METRIC CARD */
         [data-testid="stMetric"] {{
             background-color: {card_bg};
             padding: 12px 16px;
@@ -292,14 +250,12 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             box-shadow: 0 3px 10px {shadow};
         }}
 
-        /* TABEL */
         .stDataFrame, .stTable {{
             border-radius: 12px;
             overflow: hidden;
             border: 1px solid {border_color};
         }}
 
-        /* NOTIFICATION (st.info/dll) */
         [data-testid="stNotification"] > div{{
             background-color: {card_bg} !important;
             border-radius: 12px;
@@ -307,7 +263,6 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             box-shadow: 0 3px 10px {shadow};
         }}
 
-        /* EMPTY STATE */
         .empty-state {{
             background-color: {card_bg};
             border-radius: 18px;
@@ -325,7 +280,6 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             opacity: 0.8;
         }}
 
-        /* TICKER */
         .ticker-wrap {{
             width: 100%;
             background-color: {card_bg};
@@ -344,7 +298,6 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             color: {text_color};
         }}
 
-        /* TAG & INSIGHT */
         .tag {{
             padding: 3px 8px;
             border-radius: 4px;
@@ -370,7 +323,6 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             font-size: 0.95rem;
         }}
 
-        /* FOOTER */
         .footer {{
             position: fixed;
             left: 0;
@@ -395,7 +347,7 @@ def inject_custom_css(is_dark_mode: bool) -> None:
 
 
 # ==========================================
-# 3. KONEKSI DATA (ANTI-BLOKIR)
+# 3. KONEKSI DATA
 # ==========================================
 
 def get_yahoo_session():
@@ -414,7 +366,6 @@ def get_yahoo_session():
 
 @st.cache_data(ttl=120)
 def get_stock_ticker():
-    # Optional: hanya aktif kalau yfinance terinstall
     try:
         import yfinance as yf
 
@@ -581,7 +532,6 @@ def generate_smart_insight(summary_df: pd.DataFrame) -> str:
 def login_page(is_dark_mode: bool) -> None:
     inject_custom_css(is_dark_mode)
 
-    # Paksa keyboard numeric di mobile
     components.html(
         """
         <script>
@@ -634,7 +584,6 @@ def bandarmology_page(is_dark_mode: bool) -> None:
     inject_custom_css(is_dark_mode)
     DB_ROOT = "database"
 
-    # ---------- SIDEBAR (INPUT DATA) ----------
     with st.sidebar:
         st.subheader("📂 Sumber Data")
         source_type = st.radio(
@@ -704,13 +653,11 @@ def bandarmology_page(is_dark_mode: bool) -> None:
                 except Exception:
                     st.error("File tidak bisa dibaca. Pastikan formatnya benar ya 😊")
 
-    # ---------- MAIN CONTENT ----------
     if df_raw is not None:
         try:
             df = clean_running_trade(df_raw)
             summ = get_broker_summary(df)
 
-            # Header halaman
             st.markdown(
                 f"""
                 <div class="page-header">
@@ -734,7 +681,6 @@ def bandarmology_page(is_dark_mode: bool) -> None:
 
             st.markdown("---")
 
-            # ---------- TOP BROKER ----------
             st.subheader("🏆 Top Broker")
             tabs = st.tabs(["Semua", "Asing", "BUMN", "Lokal"])
             cats = ["All", "Foreign", "BUMN", "Local"]
@@ -768,7 +714,6 @@ def bandarmology_page(is_dark_mode: bool) -> None:
                     else:
                         st.info("Belum ada data broker di kategori ini.")
 
-            # ---------- SANKEY / FLOW MAP ----------
             st.subheader("🕸️ Broker Flow Map")
             sc1, sc2 = st.columns([2, 1])
             with sc1:
@@ -832,7 +777,6 @@ def bandarmology_page(is_dark_mode: bool) -> None:
         except Exception as e:
             st.error(f"Terjadi error saat memproses data: {e}")
     else:
-        # Empty state yang lebih manis
         st.markdown(
             """
             <div class="empty-state">
@@ -857,7 +801,6 @@ def main():
 
     inject_custom_css(st.session_state["dark_mode"])
 
-    # ---------- SIDEBAR ATAS (BRAND + THEME) ----------
     with st.sidebar:
         if st.session_state["authenticated"]:
             st.markdown(
@@ -874,18 +817,13 @@ def main():
 
         st.divider()
 
-        mode_icon = "🌙" if st.session_state["dark_mode"] else "☀️"
-        mode_text = "Dark Mode" if st.session_state["dark_mode"] else "Light Mode"
-
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.markdown(f"**{mode_icon} {mode_text}**")
-        with col2:
-            is_dark = st.toggle(
-                "Theme_Toggle",
-                value=st.session_state["dark_mode"],
-                label_visibility="collapsed",
-            )
+        # >>> TOGGLE SEDERHANA, LABEL TIDAK DISEMBUNYIKAN <<<
+        mode_label = "🌙 Dark Mode" if st.session_state["dark_mode"] else "☀️ Light Mode"
+        is_dark = st.toggle(
+            mode_label,
+            value=st.session_state["dark_mode"],
+            key="theme_toggle",
+        )
 
         if is_dark != st.session_state["dark_mode"]:
             st.session_state["dark_mode"] = is_dark
@@ -897,9 +835,7 @@ def main():
                 st.session_state["authenticated"] = False
                 st.rerun()
 
-    # ---------- ROUTING ----------
     if st.session_state["authenticated"]:
-        # Optional: ticker kalau mau dinyalakan
         # st.markdown(get_stock_ticker(), unsafe_allow_html=True)
         bandarmology_page(st.session_state["dark_mode"])
 
