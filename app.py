@@ -3,10 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import re
 import os
-import requests
-import yfinance as yf
 import streamlit.components.v1 as components 
-from datetime import datetime
 
 # ==========================================
 # 1. KONFIGURASI HALAMAN
@@ -18,7 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- DATABASE BROKER & WARNA ---
+# --- DATABASE BROKER (MAPPING) ---
 BROKER_DB = {
     # ASING (FOREIGN) - HIJAU
     'AK': {'name': 'UBS Sekuritas', 'type': 'Foreign'},
@@ -60,6 +57,8 @@ BROKER_DB = {
     'LS': {'name': 'Reliance', 'type': 'Local'},
     'CP': {'name': 'KB Valbury', 'type': 'Local'},
     'RF': {'name': 'Buana Capital', 'type': 'Local'},
+    'HP': {'name': 'Henan Putihrai', 'type': 'Local'},
+    'DH': {'name': 'Sinarmas Sekuritas', 'type': 'Local'},
 }
 
 COLOR_MAP = {
@@ -70,10 +69,9 @@ COLOR_MAP = {
 }
 
 if 'authenticated' not in st.session_state: st.session_state['authenticated'] = False
-if 'dark_mode' not in st.session_state: st.session_state['dark_mode'] = True
 
 # ==========================================
-# 2. HELPER & STYLING
+# 2. HELPER FUNCTIONS & STYLING
 # ==========================================
 
 def get_broker_info(code):
@@ -88,89 +86,94 @@ def format_number_label(value):
     if abs_val >= 1e6: return f"{value/1e6:.2f}Jt"
     return f"{value:,.0f}"
 
-def inject_custom_css():
-    mode = "dark" if st.session_state['dark_mode'] else "light"
-    bg_color = "#0e1117" if mode == "dark" else "#ffffff"
-    text_color = "#ffffff" if mode == "dark" else "#000000"
-    card_bg = "#1E1E1E" if mode == "dark" else "#f0f2f6"
+def inject_custom_css(is_dark_mode):
+    # Tentukan warna berdasarkan mode
+    if is_dark_mode:
+        bg_color = "#0e1117"
+        text_color = "#ffffff"
+        card_bg = "#262730"
+        border_color = "#444"
+        sidebar_bg = "#262730"
+    else:
+        bg_color = "#ffffff"
+        text_color = "#000000"
+        card_bg = "#f0f2f6"
+        border_color = "#ccc"
+        sidebar_bg = "#f0f2f6"
     
     st.markdown(f"""
     <style>
-        .stApp {{ background-color: {bg_color}; color: {text_color}; }}
+        /* Main App Background & Text */
+        .stApp {{
+            background-color: {bg_color};
+            color: {text_color};
+        }}
+        
+        /* Typography overrides for Light Mode visibility */
+        h1, h2, h3, h4, h5, h6, p, span, div, label {{
+            color: {text_color} !important;
+        }}
+        
+        /* PIN & Input Styles */
         .stTextInput input {{
-            text-align: center; font-size: 32px !important; letter-spacing: 15px;
-            font-weight: bold; padding: 20px; border-radius: 15px;
-            background-color: {card_bg}; color: {text_color}; border: 1px solid #444;
+            text-align: center; 
+            font-size: 32px !important; 
+            letter-spacing: 15px;
+            font-weight: bold; 
+            padding: 20px; 
+            border-radius: 15px;
+            background-color: {card_bg} !important; 
+            color: {text_color} !important; 
+            border: 1px solid {border_color};
         }}
-        .stButton button {{ width: 100%; height: 50px; font-size: 18px; border-radius: 12px; }}
-        thead tr th:first-child {{display:none}} tbody th {{display:none}}
-        .tag {{ padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; color: white; display: inline-block; margin-right: 5px;}}
+        
+        /* Buttons */
+        .stButton button {{ 
+            width: 100%; 
+            height: 50px; 
+            font-size: 18px; 
+            border-radius: 12px;
+            border: 1px solid {border_color};
+            color: {text_color};
+        }}
+        
+        /* Hide default tables index */
+        thead tr th:first-child {{display:none}} 
+        tbody th {{display:none}}
+        
+        /* Broker Tags */
+        .tag {{ padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; color: white !important; display: inline-block; margin-right: 5px;}}
         .tag-Foreign {{ background-color: {COLOR_MAP['Foreign']}; }}
-        .tag-BUMN {{ background-color: {COLOR_MAP['BUMN']}; color: black; }}
+        .tag-BUMN {{ background-color: {COLOR_MAP['BUMN']}; color: black !important; }}
         .tag-Local {{ background-color: {COLOR_MAP['Local']}; }}
-        .ticker-wrap {{
-            width: 100%; background-color: {card_bg}; padding: 12px 0;
-            border-bottom: 1px solid #333; position: sticky; top: 0; z-index: 99;
-        }}
-        .ticker-item {{ margin: 0 25px; font-weight: bold; font-family: monospace; font-size: 15px; }}
-        .up {{color: #00E396;}} .down {{color: #FF4560;}}
+        
+        /* Footer */
         .footer {{
             position: fixed; left: 0; bottom: 0; width: 100%; background: {card_bg};
-            text-align: center; padding: 8px; font-size: 12px; border-top: 1px solid #333; z-index: 1000;
+            text-align: center; padding: 8px; font-size: 12px; border-top: 1px solid {border_color}; z-index: 1000;
+            color: {text_color} !important;
         }}
+        
+        /* Insight Box */
         .insight-box {{
-            background-color: {card_bg}; padding: 20px; border-radius: 10px; border-left: 5px solid {COLOR_MAP['Foreign']};
-            margin-top: 20px; margin-bottom: 50px;
+            background-color: {card_bg}; 
+            padding: 20px; 
+            border-radius: 10px; 
+            border-left: 5px solid {COLOR_MAP['Foreign']};
+            margin-top: 20px; 
+            margin-bottom: 50px;
+            color: {text_color} !important;
+        }}
+        
+        /* Sidebar fix for Light Mode */
+        [data-testid="stSidebar"] {{
+            background-color: {sidebar_bg};
         }}
     </style>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. RUNNING TEXT (ANTI-BLOKIR)
-# ==========================================
-
-# Session khusus agar request dianggap dari Browser Chrome
-def get_yahoo_session():
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    })
-    return session
-
-@st.cache_data(ttl=60) # Refresh tiap 60 detik
-def get_stock_ticker():
-    tickers = ["BBCA", "BBRI", "BMRI", "BBNI", "TLKM", "ASII", "GOTO", "BUMI", "ADRO", "PGAS"]
-    yf_tickers = [f"{t}.JK" for t in tickers]
-    
-    try:
-        # Download dengan session custom
-        data = yf.download(yf_tickers, period="2d", progress=False, session=get_yahoo_session())['Close']
-        
-        if data.empty: return "<div class='ticker-wrap'>Market Data Offline</div>"
-        
-        last = data.iloc[-1]
-        prev = data.iloc[-2] if len(data) > 1 else last
-        
-        html = ""
-        for t in tickers:
-            tk = f"{t}.JK"
-            try:
-                p_now = last[tk]; p_prev = prev[tk]
-                if pd.isna(p_now): continue
-                
-                chg = p_now - p_prev
-                pct = (chg/p_prev)*100 if p_prev != 0 else 0
-                cls = "up" if chg >= 0 else "down"
-                sgn = "+" if chg >= 0 else ""
-                html += f"<span class='ticker-item'>{t} {int(p_now):,} <span class='{cls}'>({sgn}{pct:.2f}%)</span></span>"
-            except: continue
-            
-        return f"<div class='ticker-wrap'><marquee scrollamount='8'>{html}</marquee></div>"
-    except:
-        return "<div class='ticker-wrap'>Data Market Sedang Delay (Refresh Halaman)</div>"
-
-# ==========================================
-# 4. DATA PROCESSING
+# 3. DATA PROCESSING LOGIC
 # ==========================================
 
 def clean_running_trade(df_input):
@@ -246,7 +249,6 @@ def build_sankey(df, top_n=15, metric='Value'):
     tgt = [node_map[x] for x in flow['S_Label']]
     vals = flow[metric].tolist()
     
-    # --- FIX: Define l_colors correctly ---
     l_colors = []
     for s_idx in src:
         c_hex = colors[s_idx].lstrip('#')
@@ -271,8 +273,8 @@ def generate_smart_insight(summary_df):
 # 5. UI PAGES
 # ==========================================
 
-def login_page():
-    inject_custom_css()
+def login_page(is_dark_mode):
+    inject_custom_css(is_dark_mode)
     components.html("""<script>
     const i=window.parent.document.querySelectorAll('input[type="password"]');
     i.forEach(e=>{e.setAttribute('inputmode','numeric');e.setAttribute('pattern','[0-9]*');});
@@ -289,8 +291,10 @@ def login_page():
                     st.rerun()
                 else: st.error("Wrong PIN")
 
-def bandarmology_page():
+def bandarmology_page(is_dark_mode):
+    inject_custom_css(is_dark_mode)
     DB_ROOT = "database"
+    
     with st.sidebar:
         st.subheader("📂 Sumber Data")
         source_type = st.radio("Tipe:", ["Database Folder", "Upload Manual"], label_visibility="collapsed")
@@ -321,10 +325,10 @@ def bandarmology_page():
                                 except: st.error("Load failed")
             else: st.warning(f"Buat folder '{DB_ROOT}'")
         else:
-            upl = st.file_uploader("Upload File", type=['csv','xlsx'])
-            if upl:
+            uploaded = st.file_uploader("Upload File", type=['csv','xlsx'])
+            if uploaded:
                 try:
-                    df_raw = pd.read_csv(upl) if upl.name.endswith('csv') else pd.read_excel(upl)
+                    df_raw = pd.read_csv(uploaded) if uploaded.name.endswith('csv') else pd.read_excel(uploaded)
                     current_stock = "UPLOADED"
                 except: st.error("File Error")
 
@@ -336,15 +340,15 @@ def bandarmology_page():
             
             c1, c2, c3 = st.columns(3)
             tot_val = df['Value'].sum()
-            c1.metric("Val", format_number_label(tot_val))
-            c2.metric("Vol", f"{df['Lot_Clean'].sum():,.0f}")
+            c1.metric("Total Transaksi", f"Rp {format_number_label(tot_val)}")
+            c2.metric("Total Volume", f"{df['Lot_Clean'].sum():,.0f} Lot")
             f_share = summ[summ['Type']=='Foreign']['Total_Val'].sum() / (tot_val*2) * 100
             c3.metric("Asing", f"{f_share:.1f}%")
             
             st.divider()
             
             st.subheader("🏆 Top Broker")
-            # PEWARNAAN TABEL FIX
+            # PEWARNAAN TABEL
             def color_net(val):
                 return f'color: {"#00E396" if val>0 else "#FF4560"}; font-weight: bold;'
 
@@ -354,25 +358,36 @@ def bandarmology_page():
                 with tab:
                     d = summ if cat == 'All' else summ[summ['Type']==cat]
                     if not d.empty:
-                        # Gunakan applymap (pandas lama) atau map (pandas baru), kita gunakan map yg aman untuk styling
                         st.dataframe(d[['Code','Name','Total_Val','Net_Val']].style.format({
                             'Total_Val': format_number_label, 'Net_Val': format_number_label
                         }).map(color_net, subset=['Net_Val']), use_container_width=True, height=350)
                     else: st.info("Kosong")
             
             st.subheader("🕸️ Flow Map")
-            c_opt1, c_opt2 = st.columns([2,1])
-            with c_opt1: mode = st.radio("Metric", ["Value","Lot"], horizontal=True)
-            with c_opt2: n = st.slider("Nodes", 5, 50, 15)
-            
-            met = 'Value' if mode == "Value" else 'Lot_Clean'
+            sc1, sc2 = st.columns([2,1])
+            with sc1:
+                met = st.radio("Metrik Visual:", ["Value (Dana)", "Lot (Barang)"], horizontal=True)
+            with sc2:
+                top_n = st.slider("Jumlah Interaksi", 5, 50, 15)
+                
+            met_col = 'Value' if "Value" in met else 'Lot_Clean'
             try:
-                lbl, col, src, tgt, val, l_col = build_sankey(df, n, met)
+                lbl, col, src, tgt, val, l_col = build_sankey(df, top_n, met_col)
                 fig = go.Figure(data=[go.Sankey(
-                    node=dict(pad=15, thickness=20, line=dict(color="black", width=0.5), label=lbl, color=col),
+                    node=dict(pad=20, thickness=20, line=dict(color="black", width=0.5), label=lbl, color=col),
                     link=dict(source=src, target=tgt, value=val, color=l_col)
                 )])
-                fig.update_layout(height=600, margin=dict(l=10,r=10,b=10,t=10), font=dict(size=12))
+                
+                # Plotly layout juga perlu diadjust untuk Light Mode agar text terbaca
+                font_color = "white" if is_dark_mode else "black"
+                fig.update_layout(
+                    height=600, 
+                    margin=dict(l=10,r=10,t=10,b=10), 
+                    font=dict(size=12, color=font_color),
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)'
+                )
+                
                 st.plotly_chart(fig, use_container_width=True)
                 
                 st.markdown(f"""<div style='text-align:center'><span class='tag tag-Foreign'>ASING</span><span class='tag tag-BUMN'>BUMN</span><span class='tag tag-Local'>LOKAL</span></div>""", unsafe_allow_html=True)
@@ -380,22 +395,27 @@ def bandarmology_page():
             except Exception as e: st.warning(f"Error Visual: {e}")
             
         except Exception as e: st.error(f"Error: {e}")
-    else: st.info("Pilih data di sidebar")
+    else: st.info("Silakan pilih data di sidebar.")
 
 def main():
-    inject_custom_css()
+    # SIDEBAR CONTROLS (Ditaruh di sini agar CSS bisa di-inject langsung setelahnya)
+    with st.sidebar:
+        st.title("🦅 Bandarmology")
+        st.divider()
+        # Toggle ini mengembalikan True/False langsung
+        is_dark = st.toggle("Dark Mode", value=True)
+        if st.button("Logout"):
+            st.session_state['authenticated'] = False
+            st.rerun()
+            
+    # Inject CSS berdasarkan state toggle
+    inject_custom_css(is_dark)
+    
     if st.session_state['authenticated']:
-        st.markdown(get_stock_ticker(), unsafe_allow_html=True)
-        with st.sidebar:
-            st.title("🦅 Bandarmology")
-            st.divider()
-            is_dark = st.toggle("Dark Mode", value=True)
-            st.session_state['dark_mode'] = is_dark
-            if st.button("Logout"):
-                st.session_state['authenticated'] = False
-                st.rerun()
-        bandarmology_page()
+        bandarmology_page(is_dark)
         st.markdown("<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Market Data Delay 15 Mins</div>", unsafe_allow_html=True)
-    else: login_page()
+    else:
+        login_page(is_dark)
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()
