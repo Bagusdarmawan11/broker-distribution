@@ -3,489 +3,491 @@ import pandas as pd
 import plotly.graph_objects as go
 import re
 import io
+import os
 import yfinance as yf
-import streamlit.components.v1 as components # Wajib ada untuk hack Numpad
+import streamlit.components.v1 as components 
 from datetime import datetime
 
 # ==========================================
-# 1. KONFIGURASI HALAMAN & STATE
+# 1. KONFIGURASI & DATABASE BROKER
 # ==========================================
 st.set_page_config(
-    page_title="Broker Distribution Analyzer Pro",
-    page_icon="📈",
+    page_title="Bandarmology Pro",
+    page_icon="🦅",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# --- DATABASE BROKER (MAPPING) ---
+# Referensi broker berdasarkan screenshot & data umum BEI
+BROKER_DB = {
+    # ASING (FOREIGN) - Biasanya Hijau
+    'AK': {'name': 'UBS Sekuritas', 'type': 'Foreign'},
+    'BK': {'name': 'J.P. Morgan', 'type': 'Foreign'},
+    'ZP': {'name': 'Maybank Sekuritas', 'type': 'Foreign'},
+    'YU': {'name': 'CGS International', 'type': 'Foreign'},
+    'KZ': {'name': 'CLSA Sekuritas', 'type': 'Foreign'},
+    'RX': {'name': 'Macquarie', 'type': 'Foreign'},
+    'AI': {'name': 'UOB Kay Hian', 'type': 'Foreign'},
+    'CG': {'name': 'Citigroup', 'type': 'Foreign'},
+    'CS': {'name': 'Credit Suisse', 'type': 'Foreign'},
+    'MS': {'name': 'Morgan Stanley', 'type': 'Foreign'},
+    'GW': {'name': 'HSBC Sekuritas', 'type': 'Foreign'},
+    'AG': {'name': 'Kiwoom Sekuritas', 'type': 'Foreign'}, # Korea (Asing)
+    'BQ': {'name': 'Korea Investment', 'type': 'Foreign'}, 
+
+    # BUMN (STATE OWNED) - Biasanya Orange/Kuning/Merah BUMN
+    'CC': {'name': 'Mandiri Sekuritas', 'type': 'BUMN'},
+    'NI': {'name': 'BNI Sekuritas', 'type': 'BUMN'},
+    'OD': {'name': 'BRI Danareksa', 'type': 'BUMN'},
+    'DX': {'name': 'Bahana Sekuritas', 'type': 'BUMN'},
+
+    # LOKAL (DOMESTIC/RETAIL) - Biasanya Ungu/Abu
+    'YP': {'name': 'Mirae Asset', 'type': 'Local'},
+    'PD': {'name': 'Indo Premier', 'type': 'Local'},
+    'XL': {'name': 'Stockbit', 'type': 'Local'},
+    'XC': {'name': 'Ajaib', 'type': 'Local'},
+    'MG': {'name': 'Semesta Indovest', 'type': 'Local'},
+    'SQ': {'name': 'BCA Sekuritas', 'type': 'Local'},
+    'LG': {'name': 'Trimegah', 'type': 'Local'},
+    'EP': {'name': 'MNC Sekuritas', 'type': 'Local'},
+    'KK': {'name': 'Phillip Sekuritas', 'type': 'Local'},
+    'DR': {'name': 'RHB Sekuritas', 'type': 'Local'},
+    'GR': {'name': 'Panin Sekuritas', 'type': 'Local'},
+    'AZ': {'name': 'Sucor Sekuritas', 'type': 'Local'},
+    'BB': {'name': 'Verdhana', 'type': 'Local'},
+    'IF': {'name': 'Samuel Sekuritas', 'type': 'Local'},
+    'YJ': {'name': 'Lotus Andalan', 'type': 'Local'},
+    'LS': {'name': 'Reliance', 'type': 'Local'},
+    'CP': {'name': 'KB Valbury', 'type': 'Local'},
+}
+
+# --- PALET WARNA (Sesuai Request) ---
+COLOR_MAP = {
+    'Foreign': '#00E396', # Hijau Terang (Asing)
+    'BUMN': '#FEB019',    # Orange/Emas (BUMN)
+    'Local': '#775DD0',   # Ungu (Lokal/Ritel/Bandar Lokal)
+    'Unknown': '#546E7A'  # Abu-abu
+}
+
 # Inisialisasi Session State
-if 'authenticated' not in st.session_state:
-    st.session_state['authenticated'] = False
-if 'dark_mode' not in st.session_state:
-    st.session_state['dark_mode'] = True
+if 'authenticated' not in st.session_state: st.session_state['authenticated'] = False
+if 'dark_mode' not in st.session_state: st.session_state['dark_mode'] = True
 
 # ==========================================
-# 2. CSS CUSTOM (RESPONSIF & UI)
+# 2. HELPER FUNCTIONS (UTILITIES)
 # ==========================================
+
+def get_broker_info(code):
+    """Mendapatkan Nama Lengkap & Tipe Broker"""
+    code = str(code).upper().strip()
+    data = BROKER_DB.get(code, {'name': 'Sekuritas Lain', 'type': 'Unknown'})
+    return code, data['name'], data['type']
+
+def format_number_label(value):
+    """Format angka besar (Milyar/Triliun)"""
+    abs_val = abs(value)
+    if abs_val >= 1e12: return f"{value/1e12:.2f}T"
+    if abs_val >= 1e9: return f"{value/1e9:.2f}M"
+    if abs_val >= 1e6: return f"{value/1e6:.2f}Jt"
+    return f"{value:,.0f}"
+
 def inject_custom_css():
     mode = "dark" if st.session_state['dark_mode'] else "light"
-    
-    # Warna Theme
     bg_color = "#0e1117" if mode == "dark" else "#ffffff"
     text_color = "#ffffff" if mode == "dark" else "#000000"
-    card_bg = "#262730" if mode == "dark" else "#f0f2f6"
+    card_bg = "#1E1E1E" if mode == "dark" else "#f0f2f6"
     
     st.markdown(f"""
     <style>
-        /* Global Background */
-        .stApp {{
-            background-color: {bg_color};
-            color: {text_color};
-        }}
+        .stApp {{ background-color: {bg_color}; color: {text_color}; }}
         
-        /* LOGIN CARD STYLING (CENTERED) */
-        .login-container {{
-            display: flex;
-            justify_content: center;
-            align-items: center;
-            height: 70vh;
-            flex-direction: column;
-        }}
-        
-        /* Input Field Styling (PIN LOOK) */
+        /* PIN Pad Styles */
         .stTextInput input {{
-            text-align: center;
-            font-size: 32px !important; /* Font Besar agar enak di HP */
-            letter-spacing: 8px;
-            font-weight: bold;
-            padding: 15px;
-            border-radius: 12px;
-            background-color: {card_bg};
-            color: {text_color};
-            border: 2px solid #555;
-            transition: all 0.3s ease;
+            text-align: center; font-size: 32px !important; letter-spacing: 15px;
+            font-weight: bold; padding: 20px; border-radius: 15px;
+            background-color: {card_bg}; color: {text_color}; border: 1px solid #444;
         }}
+        .stButton button {{ width: 100%; height: 60px; font-size: 20px; border-radius: 12px; }}
         
-        .stTextInput input:focus {{
-            border-color: #ff4b4b;
-            box-shadow: 0 0 10px rgba(255, 75, 75, 0.5);
+        /* Custom Table Header */
+        thead tr th:first-child {{display:none}}
+        tbody th {{display:none}}
+        
+        /* Tags for Broker Type */
+        .tag {{
+            padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; color: white;
         }}
-        
-        /* Button Styling */
-        .stButton button {{
-            width: 100%;
-            border-radius: 10px;
-            font-weight: bold;
-            height: 55px;
-            font-size: 18px;
-            margin-top: 10px;
-        }}
-        
-        /* Running Text / Ticker */
+        .tag-Foreign {{ background-color: {COLOR_MAP['Foreign']}; }}
+        .tag-BUMN {{ background-color: {COLOR_MAP['BUMN']}; color: black; }}
+        .tag-Local {{ background-color: {COLOR_MAP['Local']}; }}
+        .tag-Unknown {{ background-color: {COLOR_MAP['Unknown']}; }}
+
+        /* Running Text */
         .ticker-wrap {{
-            width: 100%;
-            background-color: {card_bg}; 
-            color: {text_color};
-            padding: 8px 0;
-            border-bottom: 1px solid #444;
-            white-space: nowrap;
-            overflow: hidden;
-            box-sizing: border-box;
-            position: sticky;
-            top: 0;
-            z-index: 100;
+            width: 100%; background-color: {card_bg}; padding: 10px 0;
+            border-bottom: 1px solid #333; position: sticky; top: 0; z-index: 99;
         }}
-        .ticker-item {{
-            display: inline-block;
-            padding: 0 15px;
-            font-size: 14px;
-            font-weight: bold;
-        }}
-        .up {{ color: #00ff00; }}
-        .down {{ color: #ff4b4b; }}
+        .ticker-item {{ margin: 0 20px; font-weight: bold; font-family: monospace; font-size: 14px; }}
+        .up {{color: #00E396;}} .down {{color: #FF4560;}}
         
         /* Footer */
         .footer {{
-            position: fixed;
-            left: 0;
-            bottom: 0;
-            width: 100%;
-            background-color: {card_bg};
-            color: {text_color};
-            text-align: center;
-            padding: 10px;
-            font-size: 12px;
-            border-top: 1px solid #444;
-            z-index: 999;
-        }}
-        
-        /* --- MEDIA QUERY UNTUK MOBILE --- */
-        @media only screen and (max-width: 600px) {{
-            .stTextInput input {{
-                font-size: 28px !important;
-            }}
-            h1 {{ font-size: 24px !important; }}
-            h2 {{ font-size: 20px !important; }}
-            .ticker-item {{ font-size: 12px; }}
+            position: fixed; left: 0; bottom: 0; width: 100%; background: {card_bg};
+            text-align: center; padding: 5px; font-size: 11px; border-top: 1px solid #333;
         }}
     </style>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. FUNGSI LOGIKA (BACKEND)
+# 3. CORE LOGIC (DATA PROCESSING)
 # ==========================================
 
-# Fungsi Ticker Saham
 @st.cache_data(ttl=300)
 def get_stock_ticker():
     tickers = ["BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "TLKM.JK", "ASII.JK", "GOTO.JK", "BUMI.JK", "ADRO.JK"]
-    ticker_html = ""
     try:
-        data = yf.download(tickers, period="5d", progress=False)['Close']
-        if data.empty: return "<span class='ticker-item'>Market Closed / No Data</span>"
+        data = yf.download(tickers, period="2d", progress=False)['Close']
+        if data.empty or len(data) < 2: return ""
         
-        last_prices = data.iloc[-1]
-        prev_prices = data.iloc[-2]
+        last = data.iloc[-1]
+        prev = data.iloc[-2]
         
-        for symbol in tickers:
-            clean_symbol = symbol.replace(".JK", "")
+        html = ""
+        for t in tickers:
+            sym = t.replace(".JK", "")
             try:
-                price = last_prices[symbol]
-                prev = prev_prices[symbol]
-                if pd.isna(price) or pd.isna(prev): continue
-                
-                change = price - prev
-                pct_change = (change / prev) * 100
-                color_class = "up" if change >= 0 else "down"
-                sign = "+" if change >= 0 else ""
-                
-                ticker_html += f"<span class='ticker-item'>{clean_symbol} {int(price):,} <span class='{color_class}'>({sign}{pct_change:.2f}%)</span></span>"
+                p_now = last[t]; p_prev = prev[t]
+                chg = p_now - p_prev
+                pct = (chg/p_prev)*100
+                cls = "up" if chg >= 0 else "down"
+                sgn = "+" if chg >= 0 else ""
+                html += f"<span class='ticker-item'>{sym} {int(p_now):,} <span class='{cls}'>({sgn}{pct:.2f}%)</span></span>"
             except: continue
-    except:
-        return "<span class='ticker-item'>Gagal memuat data pasar.</span>"
-        
-    return f"<marquee scrollamount='6'>{ticker_html}</marquee>"
+        return f"<div class='ticker-wrap'><marquee>{html}</marquee></div>"
+    except: return ""
 
-# Fungsi Cleaning Data
 def clean_running_trade(df_input):
     df = df_input.copy()
     df.columns = df.columns.str.strip().str.capitalize()
     
+    # Mapping Header Fleksibel
     rename_map = {
-        'Time': 'Time', 'Waktu': 'Time',
-        'Price': 'Price', 'Harga': 'Price',
+        'Time': 'Time', 'Waktu': 'Time', 'Price': 'Price', 'Harga': 'Price',
         'Lot': 'Lot', 'Vol': 'Lot', 'Volume': 'Lot',
         'Buyer': 'Buyer', 'B': 'Buyer', 'Broker Beli': 'Buyer',
-        'Seller': 'Seller', 'S': 'Seller', 'Broker Jual': 'Seller',
-        'Code': 'Stock', 'Kode': 'Stock', 'Stock': 'Stock', 'Saham': 'Stock'
+        'Seller': 'Seller', 'S': 'Seller', 'Broker Jual': 'Seller'
     }
     
-    new_columns = {}
-    for col in df.columns:
-        if col in rename_map:
-            new_columns[col] = rename_map[col]
-    df.rename(columns=new_columns, inplace=True)
+    new_cols = {c: rename_map[c] for c in df.columns if c in rename_map}
+    df.rename(columns=new_cols, inplace=True)
+    
+    if not {'Price', 'Lot', 'Buyer', 'Seller'}.issubset(df.columns):
+        raise ValueError("Kolom Wajib (Price, Lot, Buyer, Seller) tidak lengkap.")
 
-    required_cols = ['Price', 'Lot', 'Buyer', 'Seller']
-    missing_cols = [c for c in required_cols if c not in df.columns]
-    if missing_cols:
-        raise ValueError(f"Kolom hilang: {', '.join(missing_cols)}")
-
-    def parse_price(x):
-        if pd.isna(x): return 0
-        s = str(x)
-        match = re.search(r"(\d+)", s.replace(',', '').replace('.', ''))
-        return int(match.group(1)) if match else 0
-
-    def parse_lot(x):
-        if pd.isna(x): return 0
-        s = str(x).replace(',', '').replace('.', '')
-        return int(s) if s.isdigit() else 0
-
-    def parse_broker(x):
-        if pd.isna(x): return "UNKNOWN"
-        s = str(x).upper()
-        return re.split(r'[\s\[]', s)[0].strip()
+    # Parsing Functions
+    def clean_num(x): 
+        return int(re.sub(r'[^\d]', '', str(x).split('(')[0])) if pd.notnull(x) else 0
+    
+    def clean_code(x): 
+        return str(x).upper().split()[0].strip()
 
     try:
-        df['Price_Clean'] = df['Price'].apply(parse_price)
-        df['Lot_Clean'] = df['Lot'].apply(parse_lot)
-        df['Buyer_Code'] = df['Buyer'].apply(parse_broker)
-        df['Seller_Code'] = df['Seller'].apply(parse_broker)
+        df['Price_Clean'] = df['Price'].apply(clean_num)
+        df['Lot_Clean'] = df['Lot'].apply(clean_num)
+        df['Buyer_Code'] = df['Buyer'].apply(clean_code)
+        df['Seller_Code'] = df['Seller'].apply(clean_code)
         
-        if 'Stock' in df.columns:
-            df['Stock'] = df['Stock'].astype(str).str.upper().str.strip()
+        # Enrich Broker Type
+        df['Buyer_Type'] = df['Buyer_Code'].apply(lambda x: get_broker_info(x)[2])
+        df['Seller_Type'] = df['Seller_Code'].apply(lambda x: get_broker_info(x)[2])
         
-        df['Shares'] = df['Lot_Clean'] * 100
-        df['Value'] = df['Shares'] * df['Price_Clean']
-        df = df[df['Value'] > 0]
-        
+        df['Value'] = df['Lot_Clean'] * 100 * df['Price_Clean']
+        return df[df['Value'] > 0]
     except Exception as e:
-        raise ValueError(f"Error saat parsing data: {str(e)}")
+        raise ValueError(f"Parsing Error: {e}")
 
-    return df
-
-# Fungsi Agregasi
-def aggregate_broker_stats(df):
-    buy_stats = df.groupby('Buyer_Code').agg({'Shares': 'sum', 'Value': 'sum'}).rename(columns={'Shares': 'Buy Vol', 'Value': 'Buy Val'})
-    sell_stats = df.groupby('Seller_Code').agg({'Shares': 'sum', 'Value': 'sum'}).rename(columns={'Shares': 'Sell Vol', 'Value': 'Sell Val'})
+def get_broker_summary(df):
+    # Buy Stats
+    buy = df.groupby('Buyer_Code').agg({'Value': 'sum', 'Lot_Clean': 'sum'}).rename(columns={'Value': 'Buy_Val', 'Lot_Clean': 'Buy_Vol'})
+    # Sell Stats
+    sell = df.groupby('Seller_Code').agg({'Value': 'sum', 'Lot_Clean': 'sum'}).rename(columns={'Value': 'Sell_Val', 'Lot_Clean': 'Sell_Vol'})
     
-    summary = pd.merge(buy_stats, sell_stats, left_index=True, right_index=True, how='outer').fillna(0)
-    summary['Net Vol'] = summary['Buy Vol'] - summary['Sell Vol']
-    summary['Net Val'] = summary['Buy Val'] - summary['Sell Val']
+    summ = pd.merge(buy, sell, left_index=True, right_index=True, how='outer').fillna(0)
     
-    summary['Avg Buy'] = summary.apply(lambda x: x['Buy Val'] / x['Buy Vol'] if x['Buy Vol'] > 0 else 0, axis=1)
-    summary['Avg Sell'] = summary.apply(lambda x: x['Sell Val'] / x['Sell Vol'] if x['Sell Vol'] > 0 else 0, axis=1)
+    summ['Net_Val'] = summ['Buy_Val'] - summ['Sell_Val']
+    summ['Net_Vol'] = summ['Buy_Vol'] - summ['Sell_Vol']
+    summ['Total_Val'] = summ['Buy_Val'] + summ['Sell_Val']
     
-    summary.index.name = 'Broker'
-    summary.reset_index(inplace=True)
-    return summary.sort_values(by='Net Vol', ascending=False)
-
-def format_number_label(value):
-    if value >= 1_000_000_000: return f"{value / 1_000_000_000:.2f} B"
-    elif value >= 1_000_000: return f"{value / 1_000_000:.2f} M"
-    elif value >= 1_000: return f"{value / 1_000:.0f} K"
-    return str(int(value))
-
-# UPDATED: Perbaikan Variable Name 'l_colors'
-def build_sankey_data(df, top_n=15, metric_col='Value'):
-    # Group berdasarkan kolom metrik yang dipilih (Value / Lot_Clean)
-    flow = df.groupby(['Buyer_Code', 'Seller_Code'])[metric_col].sum().reset_index()
-    flow = flow.sort_values(metric_col, ascending=False).head(top_n)
+    # Enrich Data
+    summ.index.name = 'Code'
+    summ = summ.reset_index()
+    summ['Name'] = summ['Code'].apply(lambda x: get_broker_info(x)[1])
+    summ['Type'] = summ['Code'].apply(lambda x: get_broker_info(x)[2])
     
-    # Rename kolom metric jadi 'Weight' agar standar
-    flow.rename(columns={metric_col: 'Weight'}, inplace=True)
+    return summ.sort_values('Net_Val', ascending=False)
 
-    flow['Source_Label'] = flow['Buyer_Code'] + " (B)"
-    flow['Target_Label'] = flow['Seller_Code'] + " (S)"
-
-    all_nodes = list(set(flow['Source_Label']).union(set(flow['Target_Label'])))
-    node_map = {name: i for i, name in enumerate(all_nodes)}
-
-    source_totals = flow.groupby('Source_Label')['Weight'].sum().to_dict()
-    target_totals = flow.groupby('Target_Label')['Weight'].sum().to_dict()
-
-    final_labels = []
-    node_colors = []
-    link_colors = [] # Definisikan list penampung warna
+def build_sankey(df, top_n=15, metric='Value'):
+    # Grouping
+    flow = df.groupby(['Buyer_Code', 'Seller_Code'])[metric].sum().reset_index()
+    flow = flow.sort_values(metric, ascending=False).head(top_n)
     
-    colors_palette = ['#9b78c4', '#66c2a5', '#fc8d62', '#8da0cb', '#e78ac3', '#a6d854', '#ffd92f', '#e5c494']
-    source_color_map = {}
-
-    for i, node in enumerate(all_nodes):
-        broker_name = node.split(' ')[0]
-        if node in source_totals:
-            val_fmt = format_number_label(source_totals[node])
-            final_labels.append(f"{broker_name} {val_fmt}")
-            c = colors_palette[i % len(colors_palette)]
-            node_colors.append(c)
-            source_color_map[node_map[node]] = c
-        elif node in target_totals:
-            val_fmt = format_number_label(target_totals[node])
-            final_labels.append(f"{val_fmt} {broker_name}")
-            node_colors.append("#d9d9d9")
-        else:
-            final_labels.append(broker_name)
-            node_colors.append("grey")
-
-    l_source = [node_map[src] for src in flow['Source_Label']]
-    l_target = [node_map[tgt] for tgt in flow['Target_Label']]
-    l_value = flow['Weight'].tolist()
-
-    for src_idx in l_source:
-        base_c = source_color_map.get(src_idx, '#888888')
-        # Buat warna link transparan
-        if 'rgb' in base_c:
-             link_colors.append(base_c.replace('rgb', 'rgba').replace(')', ', 0.6)'))
-        elif base_c.startswith('#'):
-            h = base_c.lstrip('#')
-            rgb = tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-            link_colors.append(f"rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, 0.6)")
-        else:
-            link_colors.append(base_c)
-
-    # Return variabel 'link_colors' yang benar
-    return final_labels, node_colors, l_source, l_target, l_value, link_colors
-
-def create_sankey_figure(labels, colors, src, tgt, val, l_colors, title):
-    fig = go.Figure(data=[go.Sankey(
-        node=dict(pad=15, thickness=20, line=dict(color="white", width=0.5), label=labels, color=colors),
-        link=dict(source=src, target=tgt, value=val, color=l_colors)
-    )])
-    fig.update_layout(
-        title_text=f"<b>{title}</b>",
-        font=dict(size=12, family="Arial"), height=600,
-        margin=dict(l=10, r=10, t=40, b=20)
-    )
-    return fig
-
-# ==========================================
-# 4. SISTEM LOGIN (KEYBOARD NUMPAD FIX)
-# ==========================================
-
-def login_system():
-    inject_custom_css()
+    # Labeling (Add Value to Label)
+    flow['B_Label'] = flow['Buyer_Code'] + " (B)"
+    flow['S_Label'] = flow['Seller_Code'] + " (S)"
     
-    # --- JAVASCRIPT HACK UNTUK NUMPAD ---
-    components.html("""
-        <script>
-            const inputs = window.parent.document.querySelectorAll('input[type="password"]');
-            inputs.forEach(input => {
-                input.setAttribute('inputmode', 'numeric');
-                input.setAttribute('pattern', '[0-9]*');
-            });
-        </script>
-    """, height=0, width=0)
-    # -------------------------------------
-
-    col1, col2, col3 = st.columns([1, 2, 1])
+    all_nodes = list(set(flow['B_Label']).union(set(flow['S_Label'])))
+    node_map = {k: v for v, k in enumerate(all_nodes)}
     
-    with col2:
-        st.markdown("<div style='height: 80px;'></div>", unsafe_allow_html=True)
+    # Totals for Labels
+    b_totals = flow.groupby('B_Label')[metric].sum()
+    s_totals = flow.groupby('S_Label')[metric].sum()
+    
+    labels, colors = [], []
+    
+    for node in all_nodes:
+        code = node.split()[0]
+        b_type = get_broker_info(code)[2]
+        color = COLOR_MAP.get(b_type, '#888')
         
-        with st.form("login_form"):
-            st.markdown("<h2 style='text-align: center; margin-bottom: 5px;'>🔐 Restricted Access</h2>", unsafe_allow_html=True)
-            st.markdown("<p style='text-align: center; color: #888; margin-bottom: 30px;'>Input PIN Access</p>", unsafe_allow_html=True)
+        if node in b_totals:
+            val_str = format_number_label(b_totals[node])
+            labels.append(f"{code} {val_str}")
+        else:
+            val_str = format_number_label(s_totals.get(node, 0))
+            labels.append(f"{val_str} {code}")
             
-            # Input PIN
-            pin_input = st.text_input("PIN", type="password", placeholder="••••••", label_visibility="collapsed")
-            
-            submit = st.form_submit_button("LOGIN ➔", type="primary")
-            
-            if submit:
-                if pin_input == "241130":
+        colors.append(color)
+        
+    # Links
+    src = [node_map[x] for x in flow['B_Label']] # Buyer source? No, usually Seller -> Buyer is flow of goods. Buyer -> Seller is flow of money.
+    # Logic User: "Buyer (Kiri) -> Seller (Kanan)" (Flow of Money)
+    # Source = Buyer, Target = Seller
+    
+    tgt = [node_map[x] for x in flow['S_Label']]
+    vals = flow[metric].tolist()
+    
+    # Link Colors (Transparent version of Source/Buyer)
+    l_colors = []
+    for s_idx in src:
+        c_hex = colors[s_idx].lstrip('#')
+        rgb = tuple(int(c_hex[i:i+2], 16) for i in (0, 2, 4))
+        l_colors.append(f"rgba({rgb[0]},{rgb[1]},{rgb[2]}, 0.6)")
+        
+    return labels, colors, src, tgt, vals, l_colors
+
+# ==========================================
+# 4. DIRECTORY & FILE HANDLING
+# ==========================================
+DB_ROOT = "database" # Ganti sesuai nama folder root
+
+def get_available_stocks():
+    if not os.path.exists(DB_ROOT): return []
+    return sorted([d for d in os.listdir(DB_ROOT) if os.path.isdir(os.path.join(DB_ROOT, d))])
+
+def get_years(stock):
+    path = os.path.join(DB_ROOT, stock)
+    return sorted(os.listdir(path)) if os.path.exists(path) else []
+
+def get_months(stock, year):
+    path = os.path.join(DB_ROOT, stock, year)
+    return sorted(os.listdir(path)) if os.path.exists(path) else []
+
+def get_dates(stock, year, month):
+    path = os.path.join(DB_ROOT, stock, year, month)
+    if not os.path.exists(path): return []
+    files = [f for f in os.listdir(path) if f.endswith('.csv') or f.endswith('.xlsx')]
+    return sorted(files)
+
+# ==========================================
+# 5. MAIN APP UI
+# ==========================================
+
+def login_page():
+    inject_custom_css()
+    # Numpad Hack
+    components.html("""<script>
+    const i=window.parent.document.querySelectorAll('input[type="password"]');
+    i.forEach(e=>{e.setAttribute('inputmode','numeric');e.setAttribute('pattern','[0-9]*');});
+    </script>""", height=0)
+    
+    c1, c2, c3 = st.columns([1,2,1])
+    with c2:
+        st.markdown("<br><br><h1 style='text-align:center'>🔒 ACCESS REQUIRED</h1>", unsafe_allow_html=True)
+        with st.form("login"):
+            pin = st.text_input("PIN", type="password", placeholder="• • • • • •", label_visibility="collapsed")
+            if st.form_submit_button("UNLOCK SYSTEM"):
+                if pin == "241130":
                     st.session_state['authenticated'] = True
                     st.rerun()
-                else:
-                    st.error("❌ PIN Salah!")
+                else: st.error("ACCESS DENIED")
 
-# ==========================================
-# 5. MAIN APPLICATION
-# ==========================================
-
-def main():
-    # Cek Auth
-    if not st.session_state['authenticated']:
-        login_system()
-        st.stop() # Stop render konten utama jika belum login
-
-    # --- JIKA SUDAH LOGIN ---
-    
-    # Sidebar Settings
-    st.sidebar.title("⚙️ Pengaturan")
-    is_dark = st.sidebar.toggle("Dark Mode", value=True)
-    st.session_state['dark_mode'] = is_dark
-    inject_custom_css() # Re-inject CSS
-    
-    # Logout
-    if st.sidebar.button("Logout 🔓"):
-        st.session_state['authenticated'] = False
-        st.rerun()
-
-    # Ticker Running Text
+def main_dashboard():
+    inject_custom_css()
     st.markdown(get_stock_ticker(), unsafe_allow_html=True)
     
-    # Konten Utama
-    st.title("📊 Broker Distribution Analyzer")
-    st.markdown("Tools analisis bandarmologi Running Trade BEI.")
-    
-    st.sidebar.header("📂 Input Data")
-    uploaded_file = st.sidebar.file_uploader("Upload File Running Trade", type=['csv', 'xlsx', 'xls'])
-
-    if not uploaded_file:
-        st.info("👋 Silakan upload file CSV atau Excel.")
-        # Tampilkan footer
-        st.markdown("""<div class="footer">Copyright by PT Catindo Bagus Perkasa 2025 | Data Market Delay 15 Mins</div>""", unsafe_allow_html=True)
-        return
-
-    try:
-        if uploaded_file.name.endswith('.csv'):
-            df_raw = pd.read_csv(uploaded_file)
-        else:
-            df_raw = pd.read_excel(uploaded_file)
-            
-        df_clean = clean_running_trade(df_raw)
+    # SIDEBAR CONTROL
+    with st.sidebar:
+        st.title("🎛️ Control Panel")
         
-        # Filter Saham
-        if 'Stock' in df_clean.columns:
-            st.sidebar.markdown("---")
-            st.sidebar.subheader("🔍 Filter Saham")
-            all_stocks = sorted(df_clean['Stock'].unique())
-            selected_stocks = st.sidebar.multiselect("Pilih Saham", all_stocks, default=all_stocks)
-            
-            if selected_stocks:
-                df_clean = df_clean[df_clean['Stock'].isin(selected_stocks)]
+        # --- DATA SOURCE SELECTOR ---
+        source_type = st.radio("Sumber Data:", ["📂 Database Folder", "📤 Upload Manual"])
+        
+        df_raw = None
+        current_stock = "UNKNOWN"
+        
+        if source_type == "📂 Database Folder":
+            stocks = get_available_stocks()
+            if not stocks:
+                st.error(f"Folder '{DB_ROOT}' tidak ditemukan!")
             else:
-                st.warning("Pilih minimal satu saham.")
-                st.stop()
-        
-        # Metrik
+                sel_stock = st.selectbox("Emiten", stocks)
+                current_stock = sel_stock
+                
+                years = get_years(sel_stock)
+                sel_year = st.selectbox("Tahun", years) if years else None
+                
+                months = get_months(sel_stock, sel_year) if sel_year else []
+                sel_month = st.selectbox("Bulan", months) if months else None
+                
+                dates = get_dates(sel_stock, sel_year, sel_month) if sel_month else []
+                sel_file = st.selectbox("Tanggal (File)", dates) if dates else None
+                
+                if sel_file:
+                    file_path = os.path.join(DB_ROOT, sel_stock, sel_year, sel_month, sel_file)
+                    if st.button("🚀 LOAD DATA"):
+                        try:
+                            if file_path.endswith('.csv'): df_raw = pd.read_csv(file_path)
+                            else: df_raw = pd.read_excel(file_path)
+                            st.success(f"Loaded: {sel_file}")
+                        except Exception as e: st.error(f"Err: {e}")
+                        
+        else: # Upload Manual
+            uploaded = st.file_uploader("Drop CSV/Excel", type=['csv','xlsx'])
+            if uploaded:
+                try:
+                    if uploaded.name.endswith('.csv'): df_raw = pd.read_csv(uploaded)
+                    else: df_raw = pd.read_excel(uploaded)
+                    current_stock = "UPLOADED"
+                except: st.error("File Error")
+
         st.divider()
-        c1, c2, c3 = st.columns(3)
-        total_val = df_clean['Value'].sum()
-        total_vol = df_clean['Lot_Clean'].sum()
-        unique_brokers = pd.concat([df_clean['Buyer_Code'], df_clean['Seller_Code']]).nunique()
-        
-        c1.metric("Total Transaksi", f"Rp {format_number_label(total_val)}")
-        c2.metric("Total Volume", f"{total_vol:,.0f} Lot")
-        c3.metric("Broker Terlibat", f"{unique_brokers}")
-        
-        # Tabel
-        st.header("📋 Ringkasan Broker")
-        min_vol = st.sidebar.number_input("Filter Min. Volume (Lot)", min_value=0, value=0, step=100)
-        summary_df = aggregate_broker_stats(df_clean)
-        filtered_summary = summary_df[(summary_df['Buy Vol'] + summary_df['Sell Vol']) >= min_vol]
-        
-        st.dataframe(
-            filtered_summary.style.format({
-                'Buy Val': "Rp {:,.0f}", 'Sell Val': "Rp {:,.0f}", 
-                'Net Val': "Rp {:,.0f}", 'Buy Vol': "{:,.0f}", 
-                'Sell Vol': "{:,.0f}", 'Net Vol': "{:,.0f}",
-                'Avg Buy': "Rp {:,.0f}", 'Avg Sell': "Rp {:,.0f}"
-            }).background_gradient(subset=['Net Val'], cmap='RdYlGn'),
-            use_container_width=True,
-            height=400
-        )
+        if st.button("Logout"): 
+            st.session_state['authenticated'] = False
+            st.rerun()
 
-        # Sankey Diagram (Switch Mode)
-        st.header("🕸️ Peta Aliran Dana & Volume")
-        
-        # --- OPSI SWITCH METRIC (VALUE / VOLUME) ---
-        col_opt1, col_opt2 = st.columns([2, 1])
-        with col_opt1:
-            viz_mode = st.radio(
-                "Pilih Metrik Visualisasi:", 
-                ["💰 Value (Aliran Dana)", "📦 Volume (Aliran Barang/Lot)"], 
-                horizontal=True
-            )
-        with col_opt2:
-            top_n = st.slider("Jumlah Interaksi", 5, 50, 15)
-        
-        # Tentukan Logic Berdasarkan Pilihan
-        if "Value" in viz_mode:
-            metric_col = 'Value'
-            title_sankey = "Peta Aliran Dana (Rupiah): Buyer (Kiri) → Seller (Kanan)"
-        else:
-            metric_col = 'Lot_Clean'
-            title_sankey = "Peta Aliran Barang (Lot): Buyer (Kiri) → Seller (Kanan)"
-        
+    # MAIN CONTENT
+    if df_raw is not None:
         try:
-            lbl, col, src, tgt, val, l_col = build_sankey_data(df_clean, top_n=top_n, metric_col=metric_col)
-            fig = create_sankey_figure(lbl, col, src, tgt, val, l_col, title=title_sankey)
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception as e:
-            st.warning(f"Data tidak cukup untuk visualisasi. ({str(e)})")
+            df = clean_running_trade(df_raw)
+            summ = get_broker_summary(df)
+            
+            # --- HEADER ---
+            st.title(f"📊 Analisis Bandarmology: {current_stock}")
+            
+            # --- SUMMARY CARDS ---
+            tot_val = df['Value'].sum()
+            tot_vol = df['Lot_Clean'].sum()
+            
+            # Hitung Dominasi Asing vs Lokal
+            val_by_type = summ.groupby('Type')['Total_Val'].sum()
+            f_val = val_by_type.get('Foreign', 0)
+            l_val = val_by_type.get('Local', 0)
+            
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Total Value", format_number_label(tot_val))
+            c2.metric("Total Volume", f"{tot_vol:,.0f}")
+            c3.metric("Asing (Foreign)", f"{(f_val/tot_val*100 if tot_val else 0):.1f}%", help="Partisipasi Broker Asing")
+            c4.metric("Lokal (Local)", f"{(l_val/tot_val*100 if tot_val else 0):.1f}%")
+            
+            st.divider()
+            
+            # --- TABEL TOP BROKER (Styling Mirip Screenshot) ---
+            st.subheader("🏆 Top Broker Summary")
+            
+            tab_all, tab_asing, tab_bumn, tab_lokal = st.tabs(["SEMUA", "ASING (Foreign)", "BUMN", "LOKAL"])
+            
+            def render_broker_table(data_df):
+                if data_df.empty:
+                    st.info("Tidak ada data untuk kategori ini.")
+                    return
+                
+                # Custom Styling Function
+                def color_net_val(val):
+                    color = '#00E396' if val > 0 else '#FF4560'
+                    return f'color: {color}; font-weight: bold;'
+                
+                def broker_tag(b_type):
+                    return f'background-color: {COLOR_MAP.get(b_type, "#888")}; color: white; padding: 2px 5px; border-radius: 4px;'
 
-    except ValueError as ve:
-        st.error(f"❌ Format Data Salah: {str(ve)}")
-    except Exception as e:
-        st.error(f"❌ Error: {str(e)}")
-        
+                # Display Logic
+                display_df = data_df[['Code', 'Name', 'Total_Val', 'Net_Val']].copy()
+                
+                # Kita pakai Styler bawaan Pandas untuk warna teks angka
+                st.dataframe(
+                    display_df.style
+                    .format({'Total_Val': format_number_label, 'Net_Val': format_number_label})
+                    .applymap(color_net_val, subset=['Net_Val']),
+                    use_container_width=True,
+                    height=400,
+                    column_config={
+                        "Code": "Kode",
+                        "Name": "Sekuritas",
+                        "Total_Val": "T. Val",
+                        "Net_Val": "Net Val (Acc/Dist)"
+                    }
+                )
+
+            with tab_all: render_broker_table(summ)
+            with tab_asing: render_broker_table(summ[summ['Type'] == 'Foreign'])
+            with tab_bumn: render_broker_table(summ[summ['Type'] == 'BUMN'])
+            with tab_lokal: render_broker_table(summ[summ['Type'] == 'Local'])
+            
+            # --- LEGEND WARNA ---
+            st.markdown(f"""
+            <div style="display:flex; gap:15px; justify-content:center; margin-top:10px; margin-bottom:30px;">
+                <span class="tag tag-Foreign">ASING (Foreign)</span>
+                <span class="tag tag-BUMN">BUMN</span>
+                <span class="tag tag-Local">LOKAL</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # --- SANKEY DIAGRAM ---
+            st.subheader("🕸️ Peta Aliran Dana (Broker Flow)")
+            
+            s_col1, s_col2 = st.columns([3, 1])
+            with s_col1:
+                viz_type = st.radio("Metrik:", ["Value (Dana)", "Lot (Barang)"], horizontal=True)
+            with s_col2:
+                top_n = st.slider("Jml Interaksi", 5, 50, 15)
+                
+            met_col = 'Value' if "Value" in viz_type else 'Lot_Clean'
+            
+            try:
+                lbl, col, src, tgt, val, l_col = build_sankey(df, top_n, met_col)
+                fig = go.Figure(data=[go.Sankey(
+                    node=dict(pad=20, thickness=20, line=dict(color="black", width=0.5), label=lbl, color=col),
+                    link=dict(source=src, target=tgt, value=val, color=l_col)
+                )])
+                fig.update_layout(height=600, margin=dict(l=10, r=10, t=10, b=10), font=dict(size=12))
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Label Bawah Visual
+                st.caption(f"visualisasi: Aliran {viz_type} dari Buyer (Kiri) ke Seller (Kanan). Warna Node menunjukkan kategori broker.")
+                
+            except Exception as e: st.warning("Data tidak cukup untuk Sankey.")
+
+        except Exception as e:
+            st.error(f"Terjadi Kesalahan Pemrosesan: {str(e)}")
+    
+    else:
+        st.info("👈 Silakan pilih Data dari Sidebar atau Upload File.")
+
     # Footer
-    st.markdown("""
-        <div class="footer">
-            Copyright by PT Catindo Bagus Perkasa 2025 | Data Market Delay 15 Mins
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown("<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Market Data Delay 15 Mins</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
-    main()
+    if st.session_state['authenticated']:
+        main_dashboard()
+    else:
+        login_page()
