@@ -3,7 +3,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import re
 import os
-import requests
 import streamlit.components.v1 as components 
 
 # ==========================================
@@ -72,11 +71,10 @@ COLOR_MAP = {
 }
 
 if 'authenticated' not in st.session_state: st.session_state['authenticated'] = False
-# Default Mode: True = Dark, False = Light
 if 'dark_mode' not in st.session_state: st.session_state['dark_mode'] = True
 
 # ==========================================
-# 2. HELPER & STYLING (FIX UI/UX)
+# 2. HELPER & CSS STYLING (FIX UI)
 # ==========================================
 
 def get_broker_info(code):
@@ -92,7 +90,7 @@ def format_number_label(value):
     return f"{value:,.0f}"
 
 def inject_custom_css(is_dark_mode):
-    # Logika Warna Dinamis (Fix Light Mode)
+    # Palet Warna Dinamis
     if is_dark_mode:
         bg_color = "#0e1117"
         sidebar_bg = "#262730"
@@ -101,40 +99,43 @@ def inject_custom_css(is_dark_mode):
         border_color = "#444"
         input_bg = "#262730"
         shadow = "rgba(0,0,0,0.5)"
-        toggle_text = "Switch to Light Mode"
     else:
-        bg_color = "#FFFFFF"      # Background Putih Bersih
-        sidebar_bg = "#F8F9FA"    # Sidebar Abu Sangat Muda
-        text_color = "#000000"    # Teks Hitam Pekat
+        bg_color = "#FFFFFF"
+        sidebar_bg = "#F7F7F7" # Abu sangat muda untuk sidebar light mode
+        text_color = "#000000"
         card_bg = "#FFFFFF"
-        border_color = "#E0E0E0"
+        border_color = "#CCCCCC"
         input_bg = "#FFFFFF"
         shadow = "rgba(0,0,0,0.1)"
-        toggle_text = "Switch to Dark Mode"
 
     st.markdown(f"""
     <style>
-        /* MAIN APP & SIDEBAR BACKGROUND */
+        /* MAIN APP */
         .stApp {{
             background-color: {bg_color};
             color: {text_color};
         }}
+        
+        /* SIDEBAR FIX */
         [data-testid="stSidebar"] {{
             background-color: {sidebar_bg} !important;
             border-right: 1px solid {border_color};
         }}
-        
-        /* TYPOGRAPHY FIX - MEMAKSA WARNA TEXT */
-        h1, h2, h3, h4, h5, h6, p, li, span, label, div, .stMarkdown {{
+        [data-testid="stSidebar"] h1, 
+        [data-testid="stSidebar"] h2, 
+        [data-testid="stSidebar"] h3, 
+        [data-testid="stSidebar"] label, 
+        [data-testid="stSidebar"] span, 
+        [data-testid="stSidebar"] div {{
             color: {text_color} !important;
         }}
         
-        /* Sidebar Specific Text Fix */
-        [data-testid="stSidebar"] * {{
+        /* TYPOGRAPHY GLOBAL */
+        h1, h2, h3, h4, h5, h6, p, li, label {{
             color: {text_color} !important;
         }}
 
-        /* PIN INPUT & FORMS */
+        /* INPUT FIELDS & PIN */
         .stTextInput input {{
             text-align: center; 
             font-size: 32px !important; 
@@ -169,18 +170,17 @@ def inject_custom_css(is_dark_mode):
             color: #ff4b4b !important;
         }}
 
-        /* DROPDOWN / SELECTBOX FIX */
-        /* Kotak Dropdown Utama */
+        /* DROPDOWN / SELECTBOX FIX (Agar tidak hitam di light mode) */
         div[data-baseweb="select"] > div {{
             background-color: {input_bg} !important;
             color: {text_color} !important;
             border-color: {border_color} !important;
         }}
-        /* Text di dalam Dropdown */
         div[data-baseweb="select"] span {{
             color: {text_color} !important;
         }}
-        /* Menu Pop-up (Pilihan) */
+        
+        /* Popover Menu Dropdown */
         div[data-baseweb="menu"] {{
             background-color: {card_bg} !important;
         }}
@@ -188,12 +188,13 @@ def inject_custom_css(is_dark_mode):
             color: {text_color} !important;
         }}
         
-        /* TAGS & INSIGHTS */
+        /* TAGS */
         .tag {{ padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; color: white !important; display: inline-block; margin-right: 5px;}}
         .tag-Foreign {{ background-color: {COLOR_MAP['Foreign']}; }}
         .tag-BUMN {{ background-color: {COLOR_MAP['BUMN']}; color: black !important; }}
         .tag-Local {{ background-color: {COLOR_MAP['Local']}; }}
         
+        /* INSIGHT BOX */
         .insight-box {{
             background-color: {card_bg}; 
             padding: 20px; 
@@ -204,6 +205,7 @@ def inject_custom_css(is_dark_mode):
             box-shadow: 0 2px 8px {shadow};
             border: 1px solid {border_color};
         }}
+        .insight-text {{ color: {text_color} !important; }}
         
         /* FOOTER */
         .footer {{
@@ -216,7 +218,7 @@ def inject_custom_css(is_dark_mode):
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. DATA PROCESSING LOGIC
+# 3. LOGIKA ANALISIS DATA
 # ==========================================
 
 def clean_running_trade(df_input):
@@ -297,49 +299,31 @@ def build_sankey(df, top_n=15, metric='Value'):
         
     return labels, colors, src, tgt, vals, l_colors
 
-def generate_market_insight(summary_df):
+def generate_smart_insight(summary_df):
     top_buyer = summary_df.iloc[0]
     top_seller = summary_df.iloc[-1]
     
-    buyer_code = top_buyer['Code']
-    buyer_net = top_buyer['Net_Val']
-    buyer_type = top_buyer['Type']
-    seller_code = top_seller['Code']
-    seller_net = abs(top_seller['Net_Val'])
+    action = "AKUMULASI" if top_buyer['Net_Val'] > (abs(top_seller['Net_Val']) * 1.1) else "DISTRIBUSI" if abs(top_seller['Net_Val']) > (top_buyer['Net_Val'] * 1.1) else "NETRAL"
     
-    if buyer_net > (seller_net * 1.5):
-        status = "🔥 AKUMULASI KUAT"
-        tone = "positive"
-    elif seller_net > (buyer_net * 1.5):
-        status = "⚠️ DISTRIBUSI MASIF"
-        tone = "negative"
-    else:
-        status = "⚖️ NETRAL / TUKAR BARANG"
-        tone = "neutral"
-        
-    if tone == "positive":
-        msg = f"Buyer ({buyer_code}) mendominasi dengan pembelian bersih signifikan. Sinyal positif jika harga belum naik tinggi."
-    elif tone == "negative":
-        msg = f"Seller ({seller_code}) melakukan penjualan agresif. Waspadai tekanan jual lanjutan."
-    else:
-        msg = "Kekuatan pembeli dan penjual relatif seimbang. Pasar sedang mencari arah."
-
-    insight_html = f"""
-    <div class='insight-title'>{status}</div>
+    return f"""
+    ### 🧠 AI Insight: {action}
     <div class='insight-text'>
-    <b>Top Buyer:</b> {buyer_code} ({buyer_type}) - Net: Rp {format_number_label(buyer_net)}<br>
-    <b>Top Seller:</b> {seller_code} ({top_seller['Type']}) - Net: Rp {format_number_label(seller_net)}<br>
-    <br><b>Analisis Singkat:</b><br>{msg}
+    **Top Buyer:** {top_buyer['Code']} ({top_buyer['Type']}) - Net Buy: Rp {format_number_label(top_buyer['Net_Val'])}<br>
+    **Top Seller:** {top_seller['Code']} ({top_seller['Type']}) - Net Sell: Rp {format_number_label(abs(top_seller['Net_Val']))}
+    <br><br>
+    <i>Analisis ini dibuat berdasarkan dominasi nilai transaksi bersih broker teratas.</i>
     </div>
     """
-    return insight_html
 
 # ==========================================
-# 4. UI PAGES & MAIN
+# 4. UI PAGES & CONTROLLER
 # ==========================================
 
 def login_page(is_dark_mode):
+    # Inject CSS sebelum render konten
     inject_custom_css(is_dark_mode)
+    
+    # Numpad Hack
     components.html("""<script>
     const i=window.parent.document.querySelectorAll('input[type="password"]');
     i.forEach(e=>{e.setAttribute('inputmode','numeric');e.setAttribute('pattern','[0-9]*');});
@@ -413,7 +397,6 @@ def bandarmology_page(is_dark_mode):
             st.divider()
             
             st.subheader("🏆 Top Broker")
-            # PEWARNAAN TABEL
             def color_net(val):
                 return f'color: {"#00E396" if val>0 else "#FF4560"}; font-weight: bold;'
 
@@ -443,7 +426,7 @@ def bandarmology_page(is_dark_mode):
                     link=dict(source=src, target=tgt, value=val, color=l_col)
                 )])
                 
-                # Adjust Plotly font color based on theme
+                # Adjust Plotly font color
                 font_col = "white" if is_dark_mode else "black"
                 fig.update_layout(
                     height=600, 
@@ -455,32 +438,50 @@ def bandarmology_page(is_dark_mode):
                 
                 st.plotly_chart(fig, use_container_width=True)
                 st.markdown(f"""<div style='text-align:center'><span class='tag tag-Foreign'>ASING</span><span class='tag tag-BUMN'>BUMN</span><span class='tag tag-Local'>LOKAL</span></div>""", unsafe_allow_html=True)
-                st.markdown(f"<div class='insight-box'>{generate_market_insight(summ)}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='insight-box'>{generate_smart_insight(summ)}</div>", unsafe_allow_html=True)
             except Exception as e: st.warning(f"Error Visual: {e}")
             
         except Exception as e: st.error(f"Error: {e}")
     else: st.info("Silakan pilih data di sidebar.")
 
 def main():
-    # SIDEBAR CONTROLS
-    with st.sidebar:
-        st.title("🦅 Bandarmology")
-        st.divider()
-        # Toggle langsung update session state
-        is_dark = st.toggle("Dark Mode", value=st.session_state['dark_mode'])
-        st.session_state['dark_mode'] = is_dark
-        if st.button("Logout"):
-            st.session_state['authenticated'] = False
-            st.rerun()
-            
-    # Inject CSS
-    inject_custom_css(st.session_state['dark_mode'])
+    # Session & Sidebar harus di-init di awal
+    if 'dark_mode' not in st.session_state:
+        st.session_state['dark_mode'] = True
+
+    # SIDEBAR CONTROL (Always visible if logged in, but toggle is needed for login page too technically, but usually placed inside main app)
+    # Kita taruh toggle di sidebar utama aplikasi
     
     if st.session_state['authenticated']:
+        with st.sidebar:
+            st.title("🦅 Bandarmology")
+            st.divider()
+            
+            # Toggle Logic
+            is_dark = st.toggle("Dark Mode", value=st.session_state['dark_mode'])
+            # Update state jika berubah
+            if is_dark != st.session_state['dark_mode']:
+                st.session_state['dark_mode'] = is_dark
+                st.rerun()
+                
+            if st.button("Logout"):
+                st.session_state['authenticated'] = False
+                st.rerun()
+        
+        # Panggil Page
         bandarmology_page(st.session_state['dark_mode'])
-        st.markdown(f"<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Mode: {'Dark' if is_dark else 'Light'}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Mode: {'Dark' if st.session_state['dark_mode'] else 'Light'}</div>", unsafe_allow_html=True)
+    
     else:
-        login_page(is_dark)
+        # Login Page Controls (Optional Toggle for Login)
+        with st.sidebar:
+            st.title("Pengaturan")
+            is_dark_login = st.toggle("Dark Mode", value=st.session_state['dark_mode'])
+            if is_dark_login != st.session_state['dark_mode']:
+                st.session_state['dark_mode'] = is_dark_login
+                st.rerun()
+                
+        login_page(st.session_state['dark_mode'])
 
 if __name__ == "__main__":
     main()
