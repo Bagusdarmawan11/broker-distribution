@@ -240,15 +240,20 @@ def aggregate_broker_stats(df):
     summary.reset_index(inplace=True)
     return summary.sort_values(by='Net Vol', ascending=False)
 
-def format_currency_label(value):
+def format_number_label(value):
     if value >= 1_000_000_000: return f"{value / 1_000_000_000:.2f} B"
     elif value >= 1_000_000: return f"{value / 1_000_000:.2f} M"
     elif value >= 1_000: return f"{value / 1_000:.0f} K"
     return str(int(value))
 
-def build_sankey_data(df, top_n=15):
-    flow = df.groupby(['Buyer_Code', 'Seller_Code'])['Value'].sum().reset_index()
-    flow = flow.sort_values('Value', ascending=False).head(top_n)
+# UPDATED: Support Metric Column (Value vs Volume)
+def build_sankey_data(df, top_n=15, metric_col='Value'):
+    # Group berdasarkan kolom metrik yang dipilih (Value / Lot_Clean)
+    flow = df.groupby(['Buyer_Code', 'Seller_Code'])[metric_col].sum().reset_index()
+    flow = flow.sort_values(metric_col, ascending=False).head(top_n)
+    
+    # Rename kolom metric jadi 'Weight' agar standar
+    flow.rename(columns={metric_col: 'Weight'}, inplace=True)
 
     flow['Source_Label'] = flow['Buyer_Code'] + " (B)"
     flow['Target_Label'] = flow['Seller_Code'] + " (S)"
@@ -256,8 +261,8 @@ def build_sankey_data(df, top_n=15):
     all_nodes = list(set(flow['Source_Label']).union(set(flow['Target_Label'])))
     node_map = {name: i for i, name in enumerate(all_nodes)}
 
-    source_totals = flow.groupby('Source_Label')['Value'].sum().to_dict()
-    target_totals = flow.groupby('Target_Label')['Value'].sum().to_dict()
+    source_totals = flow.groupby('Source_Label')['Weight'].sum().to_dict()
+    target_totals = flow.groupby('Target_Label')['Weight'].sum().to_dict()
 
     final_labels = []
     node_colors = []
@@ -268,13 +273,13 @@ def build_sankey_data(df, top_n=15):
     for i, node in enumerate(all_nodes):
         broker_name = node.split(' ')[0]
         if node in source_totals:
-            val_fmt = format_currency_label(source_totals[node])
+            val_fmt = format_number_label(source_totals[node])
             final_labels.append(f"{broker_name} {val_fmt}")
             c = colors_palette[i % len(colors_palette)]
             node_colors.append(c)
             source_color_map[node_map[node]] = c
         elif node in target_totals:
-            val_fmt = format_currency_label(target_totals[node])
+            val_fmt = format_number_label(target_totals[node])
             final_labels.append(f"{val_fmt} {broker_name}")
             node_colors.append("#d9d9d9")
         else:
@@ -283,26 +288,29 @@ def build_sankey_data(df, top_n=15):
 
     l_source = [node_map[src] for src in flow['Source_Label']]
     l_target = [node_map[tgt] for tgt in flow['Target_Label']]
-    l_value = flow['Value'].tolist()
+    l_value = flow['Weight'].tolist()
 
     for src_idx in l_source:
         base_c = source_color_map.get(src_idx, '#888888')
-        if base_c.startswith('#'):
+        # Buat warna link transparan
+        if 'rgb' in base_c:
+             l_colors.append(base_c.replace('rgb', 'rgba').replace(')', ', 0.6)'))
+        elif base_c.startswith('#'):
             h = base_c.lstrip('#')
             rgb = tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-            link_colors.append(f"rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, 0.6)")
+            l_colors.append(f"rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, 0.6)")
         else:
-            link_colors.append(base_c)
+            l_colors.append(base_c)
 
-    return final_labels, node_colors, l_source, l_target, l_value, link_colors
+    return final_labels, node_colors, l_source, l_target, l_value, l_colors
 
-def create_sankey_figure(labels, colors, src, tgt, val, l_colors):
+def create_sankey_figure(labels, colors, src, tgt, val, l_colors, title):
     fig = go.Figure(data=[go.Sankey(
         node=dict(pad=15, thickness=20, line=dict(color="white", width=0.5), label=labels, color=colors),
         link=dict(source=src, target=tgt, value=val, color=l_colors)
     )])
     fig.update_layout(
-        title_text="<b>Aliran Dana: Buyer (Kiri) → Seller (Kanan)</b>",
+        title_text=f"<b>{title}</b>",
         font=dict(size=12, family="Arial"), height=600,
         margin=dict(l=10, r=10, t=40, b=20)
     )
@@ -316,8 +324,6 @@ def login_system():
     inject_custom_css()
     
     # --- JAVASCRIPT HACK UNTUK NUMPAD ---
-    # Ini akan memaksa input type="password" menjadi inputmode="numeric" di browser HP
-    # dan otomatis memunculkan keyboard angka.
     components.html("""
         <script>
             const inputs = window.parent.document.querySelectorAll('input[type="password"]');
@@ -338,8 +344,7 @@ def login_system():
             st.markdown("<h2 style='text-align: center; margin-bottom: 5px;'>🔐 Restricted Access</h2>", unsafe_allow_html=True)
             st.markdown("<p style='text-align: center; color: #888; margin-bottom: 30px;'>Input PIN Access</p>", unsafe_allow_html=True)
             
-            # Input PIN (Type Password tapi di-hack JS jadi Numpad)
-            # Label visibility collapsed agar rapi
+            # Input PIN
             pin_input = st.text_input("PIN", type="password", placeholder="••••••", label_visibility="collapsed")
             
             submit = st.form_submit_button("LOGIN ➔", type="primary")
@@ -418,7 +423,7 @@ def main():
         total_vol = df_clean['Lot_Clean'].sum()
         unique_brokers = pd.concat([df_clean['Buyer_Code'], df_clean['Seller_Code']]).nunique()
         
-        c1.metric("Total Transaksi", f"Rp {format_currency_label(total_val)}")
+        c1.metric("Total Transaksi", f"Rp {format_number_label(total_val)}")
         c2.metric("Total Volume", f"{total_vol:,.0f} Lot")
         c3.metric("Broker Terlibat", f"{unique_brokers}")
         
@@ -439,16 +444,34 @@ def main():
             height=400
         )
 
-        # Sankey
-        st.header("🕸️ Peta Aliran Dana")
-        top_n = st.slider("Jumlah Interaksi Terbesar", 5, 50, 15)
+        # Sankey Diagram (Switch Mode)
+        st.header("🕸️ Peta Aliran Dana & Volume")
+        
+        # --- OPSI SWITCH METRIC (VALUE / VOLUME) ---
+        col_opt1, col_opt2 = st.columns([2, 1])
+        with col_opt1:
+            viz_mode = st.radio(
+                "Pilih Metrik Visualisasi:", 
+                ["💰 Value (Aliran Dana)", "📦 Volume (Aliran Barang/Lot)"], 
+                horizontal=True
+            )
+        with col_opt2:
+            top_n = st.slider("Jumlah Interaksi", 5, 50, 15)
+        
+        # Tentukan Logic Berdasarkan Pilihan
+        if "Value" in viz_mode:
+            metric_col = 'Value'
+            title_sankey = "Peta Aliran Dana (Rupiah): Buyer (Kiri) → Seller (Kanan)"
+        else:
+            metric_col = 'Lot_Clean'
+            title_sankey = "Peta Aliran Barang (Lot): Buyer (Kiri) → Seller (Kanan)"
         
         try:
-            lbl, col, src, tgt, val, l_col = build_sankey_data(df_clean, top_n=top_n)
-            fig = create_sankey_figure(lbl, col, src, tgt, val, l_col)
+            lbl, col, src, tgt, val, l_col = build_sankey_data(df_clean, top_n=top_n, metric_col=metric_col)
+            fig = create_sankey_figure(lbl, col, src, tgt, val, l_col, title=title_sankey)
             st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
-            st.warning("Data tidak cukup.")
+            st.warning(f"Data tidak cukup untuk visualisasi. ({str(e)})")
 
     except ValueError as ve:
         st.error(f"❌ Format Data Salah: {str(ve)}")
