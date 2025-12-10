@@ -141,15 +141,16 @@ def inject_custom_css():
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. LIVE MARKET DATA (YAHOO ONLY)
+# 3. LIVE MARKET DATA (STABILIZED)
 # ==========================================
 
-@st.cache_data(ttl=60) # Update tiap 60 detik
+@st.cache_data(ttl=300) # CACHE DIPERPANJANG KE 5 MENIT AGAR TIDAK RATE LIMIT
 def get_stock_ticker():
     tickers = ["BBCA", "BBRI", "BMRI", "BBNI", "TLKM", "ASII", "GOTO", "BUMI", "ADRO", "PGAS", "ANTM"]
     yf_tickers = [f"{t}.JK" for t in tickers]
     
     try:
+        # Download hanya hari ini untuk mempercepat
         data = yf.download(yf_tickers, period="2d", progress=False)['Close']
         if data.empty: return ""
         
@@ -174,16 +175,17 @@ def get_stock_ticker():
             
         return f"<div class='ticker-wrap'><marquee scrollamount='8'>{html_content}</marquee></div>"
     except Exception as e:
-        return f"<div class='ticker-wrap'>Market Data Offline</div>"
+        return f"<div class='ticker-wrap'>Market Data Offline (Rate Limit)</div>"
 
 @st.cache_data(ttl=300)
 def get_stock_details(symbol):
     try:
         ticker = yf.Ticker(f"{symbol}.JK")
+        # Mengambil info tanpa history dulu untuk cek eksistensi
+        info = ticker.info 
         hist = ticker.history(period="1d")
         
         if not hist.empty:
-            info = ticker.info
             current = hist.iloc[-1]
             return {
                 'Source': 'Yahoo Finance',
