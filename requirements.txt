@@ -4,4 +4,3 @@ plotly
 openpyxl
 matplotlib
 yfinance
-tvdatafeed
