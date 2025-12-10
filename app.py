@@ -8,6 +8,7 @@ import os
 import yfinance as yf
 import streamlit.components.v1 as components 
 from datetime import datetime
+from tvdatafeed import TvDatafeed, Interval
 
 # ==========================================
 # 1. KONFIGURASI & DATABASE BROKER
@@ -18,6 +19,12 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Inisialisasi TradingView (Tanpa Login - Mode Anonymous)
+try:
+    tv = TvDatafeed()
+except:
+    tv = None
 
 # --- DATABASE BROKER (MAPPING) ---
 BROKER_DB = {
@@ -141,22 +148,18 @@ def inject_custom_css():
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. LIVE MARKET DATA (YAHOO FINANCE)
+# 3. LIVE MARKET DATA (HYBRID ENGINE)
 # ==========================================
 
 @st.cache_data(ttl=60) # Update tiap 60 detik
 def get_stock_ticker():
     tickers = ["BBCA", "BBRI", "BMRI", "BBNI", "TLKM", "ASII", "GOTO", "BUMI", "ADRO", "PGAS", "ANTM"]
-    # Tambahkan .JK
     yf_tickers = [f"{t}.JK" for t in tickers]
     
     try:
-        # Download data 2 hari terakhir untuk hitung % change
         data = yf.download(yf_tickers, period="2d", progress=False)['Close']
-        
         if data.empty: return ""
         
-        # Data hari ini (terakhir) dan kemarin
         last_prices = data.iloc[-1]
         prev_prices = data.iloc[-2] if len(data) > 1 else last_prices
         
@@ -166,12 +169,10 @@ def get_stock_ticker():
             try:
                 price = last_prices[ticker_jk]
                 prev = prev_prices[ticker_jk]
-                
                 if pd.isna(price) or pd.isna(prev): continue
                 
                 change = price - prev
                 pct = (change / prev) * 100
-                
                 color_class = "up" if change >= 0 else "down"
                 sign = "+" if change >= 0 else ""
                 
@@ -180,30 +181,58 @@ def get_stock_ticker():
             
         return f"<div class='ticker-wrap'><marquee scrollamount='8'>{html_content}</marquee></div>"
     except Exception as e:
-        return f"<div class='ticker-wrap'>Market Data Offline: {e}</div>"
+        return f"<div class='ticker-wrap'>Market Data Offline</div>"
 
 @st.cache_data(ttl=300)
 def get_stock_details(symbol):
+    """
+    HYBRID SYSTEM: Coba Yahoo Finance, jika gagal fallback ke TradingView (TvDatafeed)
+    """
+    symbol = symbol.upper()
+    
+    # 1. COBA YAHOO FINANCE
     try:
         ticker = yf.Ticker(f"{symbol}.JK")
-        info = ticker.info
         hist = ticker.history(period="1d")
         
-        if hist.empty: return None
-        
-        current = hist.iloc[-1]
-        return {
-            'Open': current['Open'], 'High': current['High'],
-            'Low': current['Low'], 'Close': current['Close'],
-            'Volume': current['Volume'],
-            'Value_Est': current['Close'] * current['Volume'],
-            'MarketCap': info.get('marketCap', 0),
-            'PE': info.get('trailingPE', 0),
-            'EPS': info.get('trailingEps', 0),
-            'Revenue': info.get('totalRevenue', 0),
-            'Profit': info.get('grossProfits', 0) # Sometimes grossProfits is undefined, careful
-        }
-    except: return None
+        if not hist.empty:
+            info = ticker.info
+            current = hist.iloc[-1]
+            return {
+                'Source': 'Yahoo Finance',
+                'Open': current['Open'], 'High': current['High'],
+                'Low': current['Low'], 'Close': current['Close'],
+                'Volume': current['Volume'],
+                'Value_Est': current['Close'] * current['Volume'],
+                'MarketCap': info.get('marketCap', 0),
+                'PE': info.get('trailingPE', 0),
+                'EPS': info.get('trailingEps', 0),
+                'Revenue': info.get('totalRevenue', 0),
+                'Profit': info.get('grossProfits', 0)
+            }
+    except Exception as e:
+        print(f"Yahoo Fail: {e}")
+
+    # 2. FALLBACK: TRADINGVIEW (TVDATAFEED)
+    if tv:
+        try:
+            # Exchange IDX
+            df_tv = tv.get_hist(symbol=symbol, exchange='IDX', interval=Interval.in_daily, n_bars=1)
+            if df_tv is not None and not df_tv.empty:
+                curr_tv = df_tv.iloc[-1]
+                return {
+                    'Source': 'TradingView (Live)',
+                    'Open': curr_tv['open'], 'High': curr_tv['high'],
+                    'Low': curr_tv['low'], 'Close': curr_tv['close'],
+                    'Volume': curr_tv['volume'],
+                    'Value_Est': curr_tv['close'] * curr_tv['volume'],
+                    # Fundamental Data tidak tersedia di free TVDatafeed
+                    'MarketCap': 0, 'PE': 0, 'EPS': 0, 'Revenue': 0, 'Profit': 0
+                }
+        except Exception as e:
+            print(f"TV Fail: {e}")
+            
+    return None
 
 # ==========================================
 # 4. BANDARMOLOGY LOGIC
@@ -260,27 +289,22 @@ def get_broker_summary(df):
     return summ.sort_values('Net_Val', ascending=False)
 
 def build_sankey(df, top_n=15, metric='Value'):
-    # Grouping
     flow = df.groupby(['Buyer_Code', 'Seller_Code'])[metric].sum().reset_index()
     flow = flow.sort_values(metric, ascending=False).head(top_n)
     
-    # Labeling
     flow['B_Label'] = flow['Buyer_Code'] + " (B)"
     flow['S_Label'] = flow['Seller_Code'] + " (S)"
     
     all_nodes = list(set(flow['B_Label']).union(set(flow['S_Label'])))
     node_map = {k: v for v, k in enumerate(all_nodes)}
     
-    # Totals for Labels
     b_totals = flow.groupby('B_Label')[metric].sum()
     s_totals = flow.groupby('S_Label')[metric].sum()
     
     labels, colors = [], []
     
     for node in all_nodes:
-        # Extract Broker Code (e.g. "MG")
-        code = node.split()[0] 
-        # Get Type -> Get Color
+        code = node.split()[0]
         b_type = get_broker_info(code)[2]
         color = COLOR_MAP.get(b_type, '#888')
         
@@ -297,7 +321,6 @@ def build_sankey(df, top_n=15, metric='Value'):
     tgt = [node_map[x] for x in flow['S_Label']]
     vals = flow[metric].tolist()
     
-    # Link Colors (Transparent version of Source Node Color)
     l_colors = []
     for s_idx in src:
         c_hex = colors[s_idx].lstrip('#')
@@ -307,9 +330,8 @@ def build_sankey(df, top_n=15, metric='Value'):
     return labels, colors, src, tgt, vals, l_colors
 
 def generate_smart_insight(summary_df):
-    """Membuat kesimpulan otomatis ala analis"""
     top_buyer = summary_df.iloc[0]
-    top_seller = summary_df.iloc[-1] # Karena sort by Net Val Descending
+    top_seller = summary_df.iloc[-1]
     
     buyer_code = top_buyer['Code']
     buyer_val = top_buyer['Net_Val']
@@ -318,7 +340,6 @@ def generate_smart_insight(summary_df):
     seller_code = top_seller['Code']
     seller_val = abs(top_seller['Net_Val'])
     
-    # Logic Sederhana
     action = "AKUMULASI" if buyer_val > (seller_val * 1.2) else "DISTRIBUSI" if seller_val > (buyer_val * 1.2) else "NETRAL / TRADING"
     
     insight = f"""
@@ -369,10 +390,13 @@ def market_intelligence_page():
         btn_search = st.button("🔍 Analisis Live")
         
     if btn_search or symbol:
-        with st.spinner("Mengambil Data Bursa..."):
+        with st.spinner(f"Mengambil Data {symbol}..."):
             data = get_stock_details(symbol)
             
         if data:
+            # Source indicator
+            st.caption(f"Data Source: {data.get('Source', 'Unknown')}")
+            
             # Main Metrics
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Close", f"Rp {data['Close']:,.0f}")
@@ -386,38 +410,43 @@ def market_intelligence_page():
             t1, t2 = st.tabs(["📈 Chart & Trend", "💰 Financial Insight"])
             
             with t1:
-                # Simple Candle using Plotly
-                ticker = yf.Ticker(f"{symbol}.JK")
-                hist = ticker.history(period="3mo")
-                fig = go.Figure(data=[go.Candlestick(x=hist.index,
-                        open=hist['Open'], high=hist['High'],
-                        low=hist['Low'], close=hist['Close'])])
-                fig.update_layout(height=400, title=f"Pergerakan Harga {symbol} (3 Bulan)", template="plotly_dark")
-                st.plotly_chart(fig, use_container_width=True)
+                # Charting fallback
+                try:
+                    ticker = yf.Ticker(f"{symbol}.JK")
+                    hist = ticker.history(period="3mo")
+                    if not hist.empty:
+                        fig = go.Figure(data=[go.Candlestick(x=hist.index,
+                                open=hist['Open'], high=hist['High'],
+                                low=hist['Low'], close=hist['Close'])])
+                        fig.update_layout(height=400, title=f"Pergerakan Harga {symbol} (3 Bulan)", template="plotly_dark")
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.warning("Chart Data Unavailable from Yahoo Finance.")
+                except: st.warning("Chart Error.")
                 
             with t2:
-                # Earnings Data (Mockup visual based on yf info)
-                f1, f2 = st.columns(2)
-                with f1:
-                    st.subheader("Revenue vs Earnings")
-                    rev = data['Revenue']
-                    earn = data['Profit'] # Proxy for earnings if net income not avail easily in summary
-                    
-                    fig_fin = go.Figure(data=[
-                        go.Bar(name='Revenue', x=['TTM'], y=[rev], marker_color='#00E396'),
-                        go.Bar(name='Gross Profit', x=['TTM'], y=[earn], marker_color='#775DD0')
-                    ])
-                    fig_fin.update_layout(barmode='group', height=300, template="plotly_dark")
-                    st.plotly_chart(fig_fin, use_container_width=True)
-                    
-                with f2:
-                    st.subheader("Fundamental Key")
-                    st.dataframe(pd.DataFrame({
-                        'Metric': ['Market Cap', 'PE Ratio', 'EPS'],
-                        'Value': [format_number_label(data['MarketCap']), f"{data['PE']:.2f}x", f"{data['EPS']:.2f}"]
-                    }), hide_index=True, use_container_width=True)
+                if data['MarketCap'] > 0: # Only show if data valid
+                    f1, f2 = st.columns(2)
+                    with f1:
+                        st.subheader("Revenue vs Earnings")
+                        rev = data['Revenue']
+                        earn = data['Profit']
+                        fig_fin = go.Figure(data=[
+                            go.Bar(name='Revenue', x=['TTM'], y=[rev], marker_color='#00E396'),
+                            go.Bar(name='Gross Profit', x=['TTM'], y=[earn], marker_color='#775DD0')
+                        ])
+                        fig_fin.update_layout(barmode='group', height=300, template="plotly_dark")
+                        st.plotly_chart(fig_fin, use_container_width=True)
+                    with f2:
+                        st.subheader("Fundamental Key")
+                        st.dataframe(pd.DataFrame({
+                            'Metric': ['Market Cap', 'PE Ratio', 'EPS'],
+                            'Value': [format_number_label(data['MarketCap']), f"{data['PE']:.2f}x", f"{data['EPS']:.2f}"]
+                        }), hide_index=True, use_container_width=True)
+                else:
+                    st.info("Data Fundamental tidak tersedia untuk sumber data ini (TradingView Fallback).")
         else:
-            st.error("Saham tidak ditemukan atau koneksi Yahoo Finance bermasalah.")
+            st.error("Saham tidak ditemukan atau koneksi bermasalah di kedua server (Yahoo & TradingView).")
 
 def bandarmology_page():
     # DIRECTORY HANDLING
@@ -486,7 +515,6 @@ def bandarmology_page():
             st.subheader("🏆 Top Broker Summary")
             
             def color_row(row):
-                # Color logic for Net_Val text
                 color = '#00E396' if row['Net_Val'] > 0 else '#FF4560'
                 return [f'color: {color}; font-weight: bold' if col == 'Net_Val' else '' for col in row.index]
 
@@ -497,16 +525,13 @@ def bandarmology_page():
                 with tab:
                     data = summ if cat == 'All' else summ[summ['Type'] == cat]
                     if not data.empty:
-                        # Prepare Display Data
                         show = data[['Code', 'Name', 'Total_Val', 'Net_Val']].copy()
-                        
                         st.dataframe(
                             show.style.format({
                                 'Total_Val': format_number_label, 
                                 'Net_Val': format_number_label
                             }).applymap(lambda v: f'color: {"#00E396" if v>0 else "#FF4560"}', subset=['Net_Val']),
-                            use_container_width=True,
-                            height=350,
+                            use_container_width=True, height=350,
                             column_config={"Code": "Kode", "Name": "Sekuritas", "Total_Val": "Total Value", "Net_Val": "Net Buy/Sell"}
                         )
                     else: st.info("Data Kosong")
@@ -514,7 +539,6 @@ def bandarmology_page():
             # --- SANKEY VISUALIZATION ---
             st.subheader("🕸️ Peta Aliran Dana (Broker Flow)")
             
-            # Controls
             sc1, sc2 = st.columns([2,1])
             with sc1:
                 metrik_viz = st.radio("Metrik:", ["Value (Dana)", "Lot (Barang)"], horizontal=True)
@@ -532,7 +556,6 @@ def bandarmology_page():
                 fig.update_layout(height=600, margin=dict(l=10,r=10,t=10,b=10), font=dict(size=12))
                 st.plotly_chart(fig, use_container_width=True)
                 
-                # Legend & Info
                 st.markdown(f"""
                 <div style='text-align: center; margin-bottom: 10px;'>
                     <span class='tag tag-Foreign'>ASING</span>
@@ -541,7 +564,6 @@ def bandarmology_page():
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # --- AI INSIGHT ---
                 st.markdown(f"<div class='insight-box'>{generate_smart_insight(summ)}</div>", unsafe_allow_html=True)
                 
             except Exception as e: st.warning(f"Gagal memuat visualisasi: {e}")
@@ -558,29 +580,23 @@ def main():
     inject_custom_css()
     
     if st.session_state['authenticated']:
-        # Running Text Global
         st.markdown(get_stock_ticker(), unsafe_allow_html=True)
         
-        # Sidebar Navigation
         with st.sidebar:
             st.title("🦅 Bandarmology Pro")
             page = st.radio("Menu Navigasi", ["📊 Bandarmology", "🌍 Market Intelligence"])
-            
             st.divider()
             is_dark = st.toggle("Dark Mode", value=True)
             st.session_state['dark_mode'] = is_dark
-            
             if st.button("Logout"):
                 st.session_state['authenticated'] = False
                 st.rerun()
                 
-        # Page Routing
         if page == "📊 Bandarmology":
             bandarmology_page()
         else:
             market_intelligence_page()
             
-        # Footer
         st.markdown("<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Market Data Delay 15 Mins</div>", unsafe_allow_html=True)
     else:
         login_page()
