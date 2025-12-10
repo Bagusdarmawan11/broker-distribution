@@ -246,7 +246,7 @@ def format_number_label(value):
     elif value >= 1_000: return f"{value / 1_000:.0f} K"
     return str(int(value))
 
-# UPDATED: Support Metric Column (Value vs Volume)
+# UPDATED: Perbaikan Variable Name 'l_colors'
 def build_sankey_data(df, top_n=15, metric_col='Value'):
     # Group berdasarkan kolom metrik yang dipilih (Value / Lot_Clean)
     flow = df.groupby(['Buyer_Code', 'Seller_Code'])[metric_col].sum().reset_index()
@@ -266,7 +266,8 @@ def build_sankey_data(df, top_n=15, metric_col='Value'):
 
     final_labels = []
     node_colors = []
-    link_colors = []
+    link_colors = [] # Definisikan list penampung warna
+    
     colors_palette = ['#9b78c4', '#66c2a5', '#fc8d62', '#8da0cb', '#e78ac3', '#a6d854', '#ffd92f', '#e5c494']
     source_color_map = {}
 
@@ -294,15 +295,16 @@ def build_sankey_data(df, top_n=15, metric_col='Value'):
         base_c = source_color_map.get(src_idx, '#888888')
         # Buat warna link transparan
         if 'rgb' in base_c:
-             l_colors.append(base_c.replace('rgb', 'rgba').replace(')', ', 0.6)'))
+             link_colors.append(base_c.replace('rgb', 'rgba').replace(')', ', 0.6)'))
         elif base_c.startswith('#'):
             h = base_c.lstrip('#')
             rgb = tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-            l_colors.append(f"rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, 0.6)")
+            link_colors.append(f"rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, 0.6)")
         else:
-            l_colors.append(base_c)
+            link_colors.append(base_c)
 
-    return final_labels, node_colors, l_source, l_target, l_value, l_colors
+    # Return variabel 'link_colors' yang benar
+    return final_labels, node_colors, l_source, l_target, l_value, link_colors
 
 def create_sankey_figure(labels, colors, src, tgt, val, l_colors, title):
     fig = go.Figure(data=[go.Sankey(
