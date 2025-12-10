@@ -71,14 +71,13 @@ COLOR_MAP = {
     'Unknown': '#546E7A'
 }
 
+# Hanya butuh state authenticated sekarang
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
-if 'dark_mode' not in st.session_state:
-    st.session_state['dark_mode'] = True
 
 
 # ==========================================
-# 2. HELPER & STYLING
+# 2. HELPER & STYLING (TEMA FIX LIGHT)
 # ==========================================
 
 def get_broker_info(code):
@@ -98,31 +97,17 @@ def format_number_label(value):
     return f"{value:,.0f}"
 
 
-def inject_custom_css(is_dark_mode: bool) -> None:
-    if is_dark_mode:
-        bg_color = "#0e1117"
-        sidebar_bg = "#262730"
-        text_color = "#FFFFFF"
-        card_bg = "#1E1E1E"
-        border_color = "#444444"
-
-        input_bg = "#262730"
-        input_border = "#555555"
-
-        shadow = "rgba(0,0,0,0.5)"
-        btn_hover = "#ff4b4b"
-    else:
-        bg_color = "#FFFFFF"
-        sidebar_bg = "#F8F9FA"
-        text_color = "#000000"
-        card_bg = "#FFFFFF"
-        border_color = "#D1D1D1"
-
-        input_bg = "#FFFFFF"
-        input_border = "#000000"
-
-        shadow = "rgba(0,0,0,0.12)"
-        btn_hover = "#ff4b4b"
+def inject_custom_css() -> None:
+    """Tema light statis (tanpa toggle)."""
+    bg_color = "#FFFFFF"
+    sidebar_bg = "#F8F9FA"
+    text_color = "#000000"
+    card_bg = "#FFFFFF"
+    border_color = "#E5E7EB"
+    input_bg = "#FFFFFF"
+    input_border = "#000000"
+    shadow = "rgba(15,23,42,0.08)"
+    btn_hover = "#ff4b4b"
 
     st.markdown(
         f"""
@@ -158,7 +143,7 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             color: {text_color} !important;
         }}
 
-        a {{ color: #4c8df5 !important; }}
+        a {{ color: #2563EB !important; }}
         a:hover {{ text-decoration: underline; }}
 
         .app-card {{
@@ -166,7 +151,7 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             border-radius: 18px;
             padding: 24px 28px;
             border: 1px solid {border_color};
-            box-shadow: 0 10px 30px {shadow};
+            box-shadow: 0 18px 45px {shadow};
         }}
         .app-card--center {{
             max-width: 520px;
@@ -195,16 +180,16 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             background-color: {input_bg} !important;
             color: {text_color} !important;
             border: 2px solid {input_border} !important;
-            box-shadow: 0 4px 10px {shadow};
+            box-shadow: 0 4px 14px {shadow};
             transition: all 0.25s ease;
         }}
         .stTextInput input::placeholder {{
-            color: rgba(128,128,128,0.8) !important;
+            color: rgba(148,163,184,0.9) !important;
         }}
         .stTextInput input:focus {{
             border-color: #ff4b4b !important;
             outline: none;
-            box-shadow: 0 0 8px rgba(255, 75, 75, 0.45);
+            box-shadow: 0 0 8px rgba(255, 75, 75, 0.4);
         }}
 
         div[data-baseweb="select"] > div {{
@@ -232,14 +217,13 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             font-weight: 600;
             border-radius: 10px;
             border: 1px solid {border_color};
-            background-color: {input_bg} !important;
-            color: {text_color} !important;
+            background-color: #111827 !important;
+            color: #F9FAFB !important;
             transition: all 0.2s;
         }}
         .stButton button:hover {{
             border-color: {btn_hover};
-            color: {btn_hover} !important;
-            background-color: rgba(255, 75, 75, 0.12) !important;
+            background-color: #0F172A !important;
         }}
 
         [data-testid="stMetric"] {{
@@ -247,7 +231,7 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             padding: 12px 16px;
             border-radius: 14px;
             border: 1px solid {border_color};
-            box-shadow: 0 3px 10px {shadow};
+            box-shadow: 0 3px 12px {shadow};
         }}
 
         .stDataFrame, .stTable {{
@@ -256,7 +240,7 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             border: 1px solid {border_color};
         }}
 
-        [data-testid="stNotification"] > div{{
+        [data-testid="stNotification"] > div {{
             background-color: {card_bg} !important;
             border-radius: 12px;
             border: 1px solid {border_color};
@@ -270,7 +254,7 @@ def inject_custom_css(is_dark_mode: bool) -> None:
             padding: 32px 30px;
             text-align: center;
             margin-top: 2rem;
-            box-shadow: 0 6px 18px {shadow};
+            box-shadow: 0 16px 40px {shadow};
         }}
         .empty-state h2 {{
             margin-bottom: 0.4rem;
@@ -347,7 +331,7 @@ def inject_custom_css(is_dark_mode: bool) -> None:
 
 
 # ==========================================
-# 3. KONEKSI DATA
+# 3. KONEKSI DATA (optional)
 # ==========================================
 
 def get_yahoo_session():
@@ -501,7 +485,7 @@ def build_sankey(df: pd.DataFrame, top_n: int = 15, metric: str = "Value"):
     l_colors = []
     for s_idx in src:
         c_hex = colors[s_idx].lstrip("#")
-        rgb = tuple(int(c_hex[i : i + 2], 16) for i in (0, 2, 4))
+        rgb = tuple(int(c_hex[i:i+2], 16) for i in (0, 2, 4))
         l_colors.append(f"rgba({rgb[0]},{rgb[1]},{rgb[2]},0.6)")
 
     return labels, colors, src, tgt, vals, l_colors
@@ -529,9 +513,10 @@ def generate_smart_insight(summary_df: pd.DataFrame) -> str:
 # 5. UI PAGES
 # ==========================================
 
-def login_page(is_dark_mode: bool) -> None:
-    inject_custom_css(is_dark_mode)
+def login_page() -> None:
+    inject_custom_css()
 
+    # paksa keyboard numerik
     components.html(
         """
         <script>
@@ -580,8 +565,8 @@ def login_page(is_dark_mode: bool) -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
 
-def bandarmology_page(is_dark_mode: bool) -> None:
-    inject_custom_css(is_dark_mode)
+def bandarmology_page() -> None:
+    inject_custom_css()
     DB_ROOT = "database"
 
     with st.sidebar:
@@ -749,11 +734,10 @@ def bandarmology_page(is_dark_mode: bool) -> None:
                     ]
                 )
 
-                font_col = "white" if is_dark_mode else "black"
                 fig.update_layout(
                     height=600,
                     margin=dict(l=10, r=10, t=10, b=10),
-                    font=dict(size=12, color=font_col),
+                    font=dict(size=12, color="black"),
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
                 )
@@ -794,12 +778,7 @@ def bandarmology_page(is_dark_mode: bool) -> None:
 # ==========================================
 
 def main():
-    if "authenticated" not in st.session_state:
-        st.session_state["authenticated"] = False
-    if "dark_mode" not in st.session_state:
-        st.session_state["dark_mode"] = True
-
-    inject_custom_css(st.session_state["dark_mode"])
+    inject_custom_css()
 
     with st.sidebar:
         if st.session_state["authenticated"]:
@@ -817,40 +796,22 @@ def main():
 
         st.divider()
 
-        # >>> TOGGLE SEDERHANA, LABEL TIDAK DISEMBUNYIKAN <<<
-        mode_label = "🌙 Dark Mode" if st.session_state["dark_mode"] else "☀️ Light Mode"
-        is_dark = st.toggle(
-            mode_label,
-            value=st.session_state["dark_mode"],
-            key="theme_toggle",
-        )
-
-        if is_dark != st.session_state["dark_mode"]:
-            st.session_state["dark_mode"] = is_dark
-            st.rerun()
-
         if st.session_state["authenticated"]:
-            st.markdown("<br>", unsafe_allow_html=True)
             if st.button("Logout", use_container_width=True):
                 st.session_state["authenticated"] = False
                 st.rerun()
 
     if st.session_state["authenticated"]:
+        # kalau mau nyalakan ticker:
         # st.markdown(get_stock_ticker(), unsafe_allow_html=True)
-        bandarmology_page(st.session_state["dark_mode"])
-
-        footer_mode = "Dark" if st.session_state["dark_mode"] else "Light"
-        st.markdown(
-            f"<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Mode: {footer_mode}</div>",
-            unsafe_allow_html=True,
-        )
+        bandarmology_page()
     else:
-        login_page(st.session_state["dark_mode"])
-        footer_mode = "Dark" if st.session_state["dark_mode"] else "Light"
-        st.markdown(
-            f"<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Mode: {footer_mode}</div>",
-            unsafe_allow_html=True,
-        )
+        login_page()
+
+    st.markdown(
+        "<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Bandarmology Pro</div>",
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":
