@@ -91,7 +91,7 @@ def get_broker_group(code: str) -> str:
     c = str(code).upper().strip()
     if c in BUMN_BROKERS:
         return "BUMN"
-    if c in FOREIGN_BROKOKERS:
+    if c in FOREIGN_BROKERS:  # <-- sudah diperbaiki di sini
         return "Asing"
     return "Lokal"
 
@@ -620,4 +620,270 @@ def login_page():
                 "PIN",
                 type="password",
                 max_chars=6,
-                place
+                placeholder="0 0 0 0 0 0",
+            )
+            submitted = st.form_submit_button("UNLOCK")
+
+        if submitted:
+            if pin == "241130":
+                st.session_state["authenticated"] = True
+                show_sidebar()
+                st.rerun()
+            else:
+                st.error("PIN salah, coba lagi.")
+
+    # footer
+    st.markdown(
+        "<div class='footer'><span>© 2025 PT Catindo Bagus Perkasa | Bandarmology Pro (Dark)</span></div>",
+        unsafe_allow_html=True,
+    )
+
+
+# =========================================================
+# 8. HALAMAN UTAMA (BANDARMOLOGY)
+# =========================================================
+def bandarmology_page():
+    inject_custom_css()
+    show_sidebar()
+
+    DB_ROOT = "database"
+
+    # ------------- SIDEBAR -------------
+    with st.sidebar:
+        st.title("🦅 Bandarmology")
+        st.caption("Bandarmology Pro Dashboard")
+        st.markdown("---")
+
+        if st.button("Logout", use_container_width=True):
+            st.session_state["authenticated"] = False
+            st.rerun()
+
+        st.markdown("### 📂 Sumber Data")
+        source_type = st.radio(
+            "Sumber Data",
+            ["Database Folder", "Upload Manual"],
+            index=0,
+        )
+
+        df_raw = None
+        current_stock = "UNKNOWN"
+
+        if source_type == "Database Folder":
+            if os.path.exists(DB_ROOT):
+                stocks = sorted(
+                    [
+                        d
+                        for d in os.listdir(DB_ROOT)
+                        if os.path.isdir(os.path.join(DB_ROOT, d))
+                    ]
+                )
+                sel_stock = st.selectbox("Saham", stocks) if stocks else None
+                if sel_stock:
+                    p_stock = os.path.join(DB_ROOT, sel_stock)
+                    years = sorted(os.listdir(p_stock))
+                    sel_year = st.selectbox("Tahun", years) if years else None
+                    if sel_year:
+                        p_year = os.path.join(p_stock, sel_year)
+                        months = sorted(os.listdir(p_year))
+                        sel_month = (
+                            st.selectbox("Bulan", months) if months else None
+                        )
+                        if sel_month:
+                            p_month = os.path.join(p_year, sel_month)
+                            files = sorted(
+                                [
+                                    f
+                                    for f in os.listdir(p_month)
+                                    if f.endswith(("csv", "xlsx"))
+                                ]
+                            )
+                            sel_file = st.selectbox("Tanggal", files) if files else None
+                            if sel_file and st.button("Load Data"):
+                                fp = os.path.join(p_month, sel_file)
+                                try:
+                                    if fp.endswith("csv"):
+                                        df_raw = pd.read_csv(fp)
+                                    else:
+                                        df_raw = pd.read_excel(fp)
+                                    current_stock = sel_stock
+                                except Exception:
+                                    st.error("Gagal load data, cek file-nya.")
+            else:
+                st.warning(f"Folder database '{DB_ROOT}' belum dibuat.")
+        else:
+            uploaded = st.file_uploader("Upload File Running Trade", type=["csv", "xlsx"])
+            if uploaded:
+                try:
+                    if uploaded.name.endswith("csv"):
+                        df_raw = pd.read_csv(uploaded)
+                    else:
+                        df_raw = pd.read_excel(uploaded)
+                    current_stock = "UPLOADED"
+                except Exception:
+                    st.error("File tidak dapat dibaca, cek formatnya.")
+
+    # ------------- MAIN CONTENT -------------
+    if df_raw is None:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div style="
+                background-color:#020617;
+                padding:40px 30px;
+                border-radius:18px;
+                margin:0 4%;
+                border:1px dashed #283548;
+                text-align:center;
+                box-shadow:0 18px 45px rgba(0,0,0,0.65);">
+                <h2 style="margin-bottom:6px;">Belum ada data yang dipilih 📁</h2>
+                <p style="color:#9ca3af;font-size:14px;">
+                    Pilih sumber data dan file running trade di sidebar untuk mulai analisis bandarmology saham kamu.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        try:
+            df = clean_running_trade(df_raw)
+            summ = get_broker_summary(df)
+
+            st.title(f"📊 Bandarmology {current_stock}")
+
+            # --- METRIC ---
+            col1, col2, col3 = st.columns(3)
+            tot_val = df["Value"].sum()
+            col1.metric("Total Transaksi", f"Rp {format_number_label(tot_val)}")
+            col2.metric("Total Volume", f"{df['Lot_Clean'].sum():,} Lot")
+
+            foreign_val = summ[summ["Group"] == "Asing"]["Total_Val"].sum()
+            share_foreign = foreign_val / (tot_val * 2) * 100 if tot_val > 0 else 0
+            col3.metric("Porsi Asing", f"{share_foreign:.1f}%")
+
+            st.markdown("---")
+
+            # --- TOP BROKER TABLE ---
+            st.subheader("🏆 Top Broker")
+
+            def style_broker_code(val):
+                group = get_broker_group(val)
+                color = COLOR_MAP.get(group, COLOR_MAP["Unknown"])
+                return f"color:{color}; font-weight:700;"
+
+            tabs = st.tabs(["Semua", "Asing", "BUMN", "Lokal"])
+            group_labels = ["ALL", "Asing", "BUMN", "Lokal"]
+
+            for tab, g in zip(tabs, group_labels):
+                with tab:
+                    if g == "ALL":
+                        df_show = summ.copy()
+                    else:
+                        df_show = summ[summ["Group"] == g].copy()
+
+                    if df_show.empty:
+                        st.info("Belum ada broker di kategori ini.")
+                    else:
+                        st.dataframe(
+                            df_show[
+                                ["Code", "Name", "Group", "Total_Val", "Net_Val"]
+                            ]
+                            .sort_values("Total_Val", ascending=False)
+                            .style.format(
+                                {
+                                    "Total_Val": format_number_label,
+                                    "Net_Val": format_number_label,
+                                }
+                            )
+                            .applymap(style_broker_code, subset=["Code"]),
+                            use_container_width=True,
+                            height=360,
+                        )
+
+            # --- BROKER FLOW (SANKEY) ---
+            st.subheader("🕸️ Broker Flow (Sankey)")
+
+            left, right = st.columns([2, 1])
+            with left:
+                metric_choice = st.radio(
+                    "Metrik",
+                    ["Value (Dana)", "Lot (Volume)"],
+                    horizontal=True,
+                )
+            with right:
+                top_n = st.slider("Jumlah interaksi", 5, 50, 15)
+
+            metric_col = "Value" if metric_choice.startswith("Value") else "Lot_Clean"
+
+            try:
+                labels, node_colors, src, tgt, vals, link_colors = build_sankey(
+                    df, top_n=top_n, metric=metric_col
+                )
+                fig = go.Figure(
+                    data=[
+                        go.Sankey(
+                            node=dict(
+                                pad=20,
+                                thickness=18,
+                                line=dict(color="black", width=0.3),
+                                label=labels,
+                                color=node_colors,
+                            ),
+                            link=dict(
+                                source=src,
+                                target=tgt,
+                                value=vals,
+                                color=link_colors,
+                            ),
+                        )
+                    ]
+                )
+                fig.update_layout(
+                    height=600,
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    font=dict(size=12, color="#e5e7eb"),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                st.markdown(
+                    """
+                    <div style="text-align:center;margin-top:-10px;">
+                        <span class="tag tag-Asing">Asing</span>
+                        <span class="tag tag-BUMN">BUMN</span>
+                        <span class="tag tag-Lokal">Lokal</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                # --- KESIMPULAN BARU ---
+                kesimpulan_text = generate_kesimpulan(summ, current_stock)
+                st.markdown(
+                    f"<div class='insight-box'>{kesimpulan_text}</div>",
+                    unsafe_allow_html=True,
+                )
+            except Exception as e:
+                st.warning(f"Error pada visual Sankey: {e}")
+
+        except Exception as e:
+            st.error(f"Error saat memproses data: {e}")
+
+    st.markdown(
+        "<div class='footer'><span>© 2025 PT Catindo Bagus Perkasa | Bandarmology Pro (Dark)</span></div>",
+        unsafe_allow_html=True,
+    )
+
+
+# =========================================================
+# 9. MAIN ROUTER
+# =========================================================
+def main():
+    if not st.session_state["authenticated"]:
+        login_page()
+    else:
+        bandarmology_page()
+
+
+if __name__ == "__main__":
+    main()
