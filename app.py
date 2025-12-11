@@ -67,9 +67,6 @@ BROKER_NAMES = {
     "ID": "Anugerah Sekuritas Indonesia",
     "HP": "Henan Putihrai Sekuritas",
     "IF": "Samuel Sekuritas Indonesia",
-    "MG": "Semesta Indovest Sekuritas",
-    "CP": "KB Valbury Sekuritas",  # sudah di FOREIGN_BROKERS, tapi nama tetap
-    "TP": "OCBC Sekuritas Indonesia",
     "AP": "Pacific Sekuritas Indonesia",
     "EL": "Evergreen Sekuritas Indonesia",
     "SA": "Elit Sukses Sekuritas",
@@ -84,19 +81,20 @@ FOREIGN_BROKERS = {
     "AG", "AH", "AI", "AK", "BK", "BQ", "CG", "CP", "CS",
     "DR", "FS", "GI", "GW", "HD", "KI", "KK", "KZ", "RX",
     "TP", "XA", "YP", "YU", "ZP",
-    # Tambah lagi kalau di screenshot "Asing" ada kode lain
 }
 
 BUMN_BROKERS = {"CC", "DX", "NI", "OD"}
+
 
 def get_broker_group(code: str) -> str:
     """Kembalikan kelompok broker: Asing / BUMN / Lokal."""
     c = str(code).upper().strip()
     if c in BUMN_BROKERS:
         return "BUMN"
-    if c in FOREIGN_BROKERS:
+    if c in FOREIGN_BROKOKERS:
         return "Asing"
     return "Lokal"
+
 
 def get_broker_info(code: str):
     """Return (code, name, group)."""
@@ -105,12 +103,13 @@ def get_broker_info(code: str):
     group = get_broker_group(c)
     return c, name, group
 
+
 # Warna untuk group broker (dipakai di tabel + sankey + label)
 COLOR_MAP = {
     "Asing": "#ff4b4b",   # merah
     "BUMN": "#22c55e",    # hijau
     "Lokal": "#3b82f6",   # biru
-    "Unknown": "#6b7280", # abu
+    "Unknown": "#6b7280",  # abu
 }
 
 # =========================================================
@@ -198,6 +197,19 @@ def inject_custom_css():
         }}
 
         /* ============ TICKER & TAG ============ */
+        .ticker-wrap {{
+            background: #020617;
+            padding: 6px 12px;
+            border-radius: 999px;
+            border: 1px solid {border_color};
+            font-size: 11px;
+            color: #e5e7eb;
+            white-space: nowrap;
+        }}
+        .ticker-item {{
+            margin-right: 18px;
+        }}
+
         .tag {{
             padding: 4px 10px;
             border-radius: 999px;
@@ -241,6 +253,7 @@ def inject_custom_css():
         unsafe_allow_html=True,
     )
 
+
 def hide_sidebar():
     st.markdown(
         """
@@ -252,6 +265,7 @@ def hide_sidebar():
         unsafe_allow_html=True,
     )
 
+
 def show_sidebar():
     st.markdown(
         """
@@ -262,6 +276,7 @@ def show_sidebar():
         """,
         unsafe_allow_html=True,
     )
+
 
 # =========================================================
 # 5. TOOLS LAIN (YAHOO TICKER, FORMAT, DLL)
@@ -276,6 +291,7 @@ def format_number_label(value):
         return f"{value/1e6:.2f}Jt"
     return f"{value:,.0f}"
 
+
 def get_yahoo_session():
     session = requests.Session()
     session.headers.update(
@@ -285,6 +301,7 @@ def get_yahoo_session():
         }
     )
     return session
+
 
 @st.cache_data(ttl=120)
 def get_stock_ticker():
@@ -328,6 +345,7 @@ def get_stock_ticker():
         return "<div class='ticker-wrap'>yfinance not installed</div>"
     except Exception:
         return "<div class='ticker-wrap'>Connection Limited</div>"
+
 
 # =========================================================
 # 6. DATA PROCESSING
@@ -373,6 +391,7 @@ def clean_running_trade(df_input):
     except Exception as e:
         raise ValueError(f"Parsing Error: {e}")
 
+
 def get_broker_summary(df):
     buy = (
         df.groupby("Buyer_Code")
@@ -396,15 +415,43 @@ def get_broker_summary(df):
 
     return summ.sort_values("Net_Val", ascending=False)
 
+
 def build_sankey(df, top_n=15, metric="Value"):
-    flow = df.groupby(["Buyer_Code", "Seller_Code"])[metric].sum().reset_index()
+    """
+    Build data untuk sankey.
+    metric: "Value" (Rp) atau "Lot_Clean" (Lot).
+    Dibuat lebih robust supaya tidak error saat ganti metrik / slider.
+    """
+    metric = "Lot_Clean" if metric == "Lot_Clean" else "Value"
+
+    if metric not in df.columns:
+        raise ValueError(f"Kolom '{metric}' tidak ditemukan di data running trade.")
+
+    # Hanya ambil kolom yang perlu
+    flow = (
+        df[["Buyer_Code", "Seller_Code", metric]]
+        .groupby(["Buyer_Code", "Seller_Code"], as_index=False)[metric]
+        .sum()
+    )
+
+    # Buang transaksi nol
+    flow = flow[flow[metric] > 0]
+
+    # Sort & batasi top_n
     flow = flow.sort_values(metric, ascending=False).head(top_n)
 
+    if flow.empty:
+        raise ValueError(
+            "Tidak ada interaksi broker yang cukup besar untuk dibuatkan Broker Flow."
+        )
+
+    # Build node
     flow["B_Label"] = flow["Buyer_Code"] + " (B)"
     flow["S_Label"] = flow["Seller_Code"] + " (S)"
-    all_nodes = list(set(flow["B_Label"]).union(set(flow["S_Label"])))
+    all_nodes = list(sorted(set(flow["B_Label"]).union(set(flow["S_Label"]))))
     node_map = {k: v for v, k in enumerate(all_nodes)}
 
+    # Total per node, dipakai untuk label
     b_totals = flow.groupby("B_Label")[metric].sum()
     s_totals = flow.groupby("S_Label")[metric].sum()
 
@@ -417,10 +464,12 @@ def build_sankey(df, top_n=15, metric="Value"):
         labels.append(f"{code} {format_number_label(val)}")
         colors.append(color)
 
+    # Link
     src = [node_map[x] for x in flow["B_Label"]]
     tgt = [node_map[x] for x in flow["S_Label"]]
-    vals = flow[metric].tolist()
+    vals = flow[metric].astype(float).tolist()
 
+    # Warna link mengikuti warna node sumber
     link_colors = []
     for s_idx in src:
         c_hex = colors[s_idx].lstrip("#")
@@ -429,22 +478,97 @@ def build_sankey(df, top_n=15, metric="Value"):
 
     return labels, colors, src, tgt, vals, link_colors
 
-def generate_smart_insight(summary_df):
-    top_buyer = summary_df.iloc[0]
-    top_seller = summary_df.iloc[-1]
 
-    if top_buyer["Net_Val"] > (abs(top_seller["Net_Val"]) * 1.1):
-        action = "AKUMULASI"
-    elif abs(top_seller["Net_Val"]) > (top_buyer["Net_Val"] * 1.1):
-        action = "DISTRIBUSI"
-    else:
-        action = "NETRAL"
-
-    return f"""
-    ### 🧠 AI Insight: {action}
-    **Top Buyer:** {top_buyer['Code']} ({top_buyer['Group']}) - Net Buy: Rp {format_number_label(top_buyer['Net_Val'])}  
-    **Top Seller:** {top_seller['Code']} ({top_seller['Group']}) - Net Sell: Rp {format_number_label(abs(top_seller['Net_Val']))}
+def generate_kesimpulan(summary_df: pd.DataFrame, stock_code: str) -> str:
     """
+    Kesimpulan yang lebih komunikatif & kaya insight untuk investor ritel.
+    """
+    if summary_df.empty:
+        return (
+            "### 🧾 Kesimpulan\n"
+            "Belum ada data broker yang cukup untuk dianalisis hari ini."
+        )
+
+    # Top buyer & seller berdasarkan Net_Val
+    buyers = summary_df.sort_values("Net_Val", ascending=False)
+    sellers = summary_df.sort_values("Net_Val", ascending=True)
+
+    top_buyer = buyers.iloc[0]
+    top_seller = sellers.iloc[0]
+
+    # Arah utama bandar
+    total_net = summary_df["Net_Val"].sum()
+    if total_net > 0:
+        trend = "didominasi **AKUMULASI** (net buy)"
+    elif total_net < 0:
+        trend = "didominasi **DISTRIBUSI** (net sell)"
+    else:
+        trend = "cenderung **NETRAL** (seimbang antara buy dan sell)"
+
+    # Dominasinya asing / lokal / BUMN
+    group_net = summary_df.groupby("Group")["Net_Val"].sum().sort_values(ascending=False)
+    dom_group = group_net.index[0]
+    dom_val = group_net.iloc[0]
+
+    if dom_val > 0:
+        dom_sentence = (
+            f"Aliran dana terbesar berasal dari broker **{dom_group}** "
+            f"dengan kecenderungan **net buy** sekitar Rp {format_number_label(dom_val)}."
+        )
+    elif dom_val < 0:
+        dom_sentence = (
+            f"Tekanan jual terbesar muncul dari broker **{dom_group}** "
+            f"dengan **net sell** sekitar Rp {format_number_label(abs(dom_val))}."
+        )
+    else:
+        dom_sentence = (
+            "Kontribusi bersih antar kelompok broker (Asing, BUMN, Lokal) hari ini relatif berimbang."
+        )
+
+    # Rangkuman praktis untuk ritel
+    buyer_line = (
+        f"- **Top Buyer:** {top_buyer['Code']} ({top_buyer['Group']}) "
+        f"dengan net buy sekitar **Rp {format_number_label(top_buyer['Net_Val'])}**."
+    )
+    seller_line = (
+        f"- **Top Seller:** {top_seller['Code']} ({top_seller['Group']}) "
+        f"dengan net sell sekitar **Rp {format_number_label(abs(top_seller['Net_Val']))}**."
+    )
+
+    if total_net > 0:
+        ritel_hint = (
+            "👉 Untuk investor ritel: perhatikan apakah akumulasi ini konsisten "
+            "beberapa hari ke depan. Jika harga juga ikut naik dengan volume sehat, "
+            "potensi **uptrend lanjutan** cukup menarik, tetapi hindari FOMO di pucuk."
+        )
+    elif total_net < 0:
+        ritel_hint = (
+            "👉 Untuk investor ritel: distribusi oleh broker besar perlu diwaspadai. "
+            "Jika penurunan harga disertai net sell berulang, lebih bijak fokus ke "
+            "manajemen risiko (cut loss / kurangi posisi) daripada menebak bottom."
+        )
+    else:
+        ritel_hint = (
+            "👉 Untuk investor ritel: pola hari ini masih netral. Cocok untuk **wait & see**, "
+            "menunggu konfirmasi arah dari pergerakan bandar pada sesi berikutnya."
+        )
+
+    text = f"""
+### 🧾 Kesimpulan {stock_code}
+
+Secara keseluruhan, aktivitas bandar hari ini **{trend}**.
+
+{dom_sentence}
+
+**Broker kunci yang perlu kamu perhatikan:**
+
+{buyer_line}  
+{seller_line}
+
+{ritel_hint}
+"""
+    return text
+
 
 # =========================================================
 # 7. HALAMAN LOGIN (PIN TANPA SIDEBAR)
@@ -513,6 +637,7 @@ def login_page():
         "<div class='footer'><span>© 2025 PT Catindo Bagus Perkasa | Bandarmology Pro (Dark)</span></div>",
         unsafe_allow_html=True,
     )
+
 
 # =========================================================
 # 8. HALAMAN UTAMA (BANDARMOLOGY)
@@ -674,6 +799,7 @@ def bandarmology_page():
                             height=360,
                         )
 
+            # --- BROKER FLOW (SANKEY) ---
             st.subheader("🕸️ Broker Flow (Sankey)")
 
             left, right = st.columns([2, 1])
@@ -686,7 +812,7 @@ def bandarmology_page():
             with right:
                 top_n = st.slider("Jumlah interaksi", 5, 50, 15)
 
-            metric_col = "Value" if "Value" in metric_choice else "Lot_Clean"
+            metric_col = "Value" if metric_choice.startswith("Value") else "Lot_Clean"
 
             try:
                 labels, node_colors, src, tgt, vals, link_colors = build_sankey(
@@ -730,8 +856,11 @@ def bandarmology_page():
                     """,
                     unsafe_allow_html=True,
                 )
+
+                # --- KESIMPULAN BARU ---
+                kesimpulan_text = generate_kesimpulan(summ, current_stock)
                 st.markdown(
-                    f"<div class='insight-box'>{generate_smart_insight(summ)}</div>",
+                    f"<div class='insight-box'>{kesimpulan_text}</div>",
                     unsafe_allow_html=True,
                 )
             except Exception as e:
@@ -745,6 +874,7 @@ def bandarmology_page():
         unsafe_allow_html=True,
     )
 
+
 # =========================================================
 # 9. MAIN ROUTER
 # =========================================================
@@ -753,6 +883,7 @@ def main():
         login_page()
     else:
         bandarmology_page()
+
 
 if __name__ == "__main__":
     main()
