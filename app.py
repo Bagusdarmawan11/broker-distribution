@@ -655,81 +655,125 @@ def bandarmology_page():
                 )
 
                 if not stocks:
-                    st.info("Folder database kosong. Gunakan 'Upload Manual' atau isi struktur foldernya.")
+                    st.info(
+                        "Folder database kosong. Gunakan 'Upload Manual' "
+                        "atau isi struktur foldernya."
+                    )
+
                 if sel_stock:
                     p_stock = os.path.join(DB_ROOT, sel_stock)
 
-                    # level 2: tahun (folder)
-                    years = sorted(
-                        [
-                            d
-                            for d in os.listdir(p_stock)
-                            if os.path.isdir(os.path.join(p_stock, d))
-                        ]
-                    )
-                    sel_year = (
-                        st.selectbox("Tahun", years, key="year_sel") if years else None
-                    )
+                    # ==== NEW: SATU FIELD TANGGAL ====
+                    # Kumpulkan semua kombinasi Tahun/Bulan/File untuk saham ini
+                    month_order = {
+                        "Januari": 1,
+                        "Februari": 2,
+                        "Maret": 3,
+                        "April": 4,
+                        "Mei": 5,
+                        "Juni": 6,
+                        "Juli": 7,
+                        "Agustus": 8,
+                        "September": 9,
+                        "Oktober": 10,
+                        "November": 11,
+                        "Desember": 12,
+                    }
 
-                    if years == []:
-                        st.info("Folder saham ini belum punya subfolder tahun.")
+                    date_entries = []
 
-                    if sel_year:
-                        p_year = os.path.join(p_stock, sel_year)
+                    for year in os.listdir(p_stock):
+                        p_year = os.path.join(p_stock, year)
+                        if not os.path.isdir(p_year):
+                            continue
 
-                        # level 3: bulan (folder)
-                        months = sorted(
-                            [
-                                d
-                                for d in os.listdir(p_year)
-                                if os.path.isdir(os.path.join(p_year, d))
-                            ]
+                        # parse tahun
+                        try:
+                            year_int = int(year)
+                        except ValueError:
+                            year_int = 0
+
+                        for month in os.listdir(p_year):
+                            p_month = os.path.join(p_year, month)
+                            if not os.path.isdir(p_month):
+                                continue
+
+                            # urutan bulan
+                            if month.isdigit():
+                                month_idx = int(month)
+                            else:
+                                month_idx = month_order.get(month, 99)
+
+                            for fname in os.listdir(p_month):
+                                if not fname.lower().endswith((".csv", ".xlsx")):
+                                    continue
+
+                                day_str = os.path.splitext(fname)[0]
+                                if day_str.isdigit():
+                                    day_int = int(day_str)
+                                    day_label = day_str.zfill(2)
+                                else:
+                                    day_int = 0
+                                    day_label = day_str
+
+                                label = f"{day_label} {month} {year}"
+                                full_path = os.path.join(p_month, fname)
+
+                                date_entries.append(
+                                    {
+                                        "label": label,
+                                        "path": full_path,
+                                        "year": year_int,
+                                        "month_idx": month_idx,
+                                        "day": day_int,
+                                    }
+                                )
+
+                    if date_entries:
+                        # sort kronologis
+                        date_entries = sorted(
+                            date_entries,
+                            key=lambda x: (x["year"], x["month_idx"], x["day"]),
                         )
-                        sel_month = (
-                            st.selectbox("Bulan", months, key="month_sel")
-                            if months
-                            else None
+
+                        labels = [e["label"] for e in date_entries]
+
+                        # default ke tanggal terakhir (paling baru)
+                        default_index = len(labels) - 1
+
+                        sel_label = st.selectbox(
+                            "Tanggal",
+                            labels,
+                            index=default_index,
+                            key="tanggal_combined",
                         )
 
-                        if months == []:
-                            st.info("Folder tahun ini belum punya subfolder bulan.")
+                        load_btn = st.button(
+                            "Load Data",
+                            use_container_width=True,
+                            key="load_btn",
+                        )
 
-                        if sel_month:
-                            p_month = os.path.join(p_year, sel_month)
-
-                            # level 4: file csv/xlsx
-                            files = sorted(
-                                [
-                                    f
-                                    for f in os.listdir(p_month)
-                                    if f.endswith(("csv", "xlsx"))
-                                ]
+                        if sel_label and load_btn:
+                            selected_entry = next(
+                                e for e in date_entries if e["label"] == sel_label
                             )
-                            sel_file = (
-                                st.selectbox("Tanggal", files, key="file_sel")
-                                if files
-                                else None
-                            )
-
-                            if files == []:
-                                st.info("Folder bulan ini belum ada file CSV/XLSX.")
-
-                            load_btn = st.button(
-                                "Load Data", use_container_width=True, key="load_btn"
-                            )
-
-                            if sel_file and load_btn:
-                                fp = os.path.join(p_month, sel_file)
-                                try:
-                                    if fp.endswith("csv"):
-                                        df_raw = pd.read_csv(fp)
-                                    else:
-                                        df_raw = pd.read_excel(fp)
-                                    current_stock = sel_stock
-                                    st.session_state["df_raw"] = df_raw
-                                    st.session_state["current_stock"] = current_stock
-                                except Exception:
-                                    st.error("Gagal load data, cek file-nya.")
+                            fp = selected_entry["path"]
+                            try:
+                                if fp.endswith(".csv"):
+                                    df_raw = pd.read_csv(fp)
+                                else:
+                                    df_raw = pd.read_excel(fp)
+                                current_stock = sel_stock
+                                st.session_state["df_raw"] = df_raw
+                                st.session_state["current_stock"] = current_stock
+                            except Exception:
+                                st.error("Gagal load data, cek file-nya.")
+                    else:
+                        st.info(
+                            "Belum ada file CSV/XLSX untuk saham ini di struktur "
+                            "folder tahun/bulan."
+                        )
             else:
                 st.warning(f"Folder database '{DB_ROOT}' belum dibuat.")
         else:
@@ -976,7 +1020,7 @@ def daftar_saham_page():
     except Exception as e:
         st.error(f"Gagal memuat file daftar saham: {e}")
         st.info(
-            "Letakkan file **'Daftar Saham  - 20251211.xlsx'** di folder yang sama dengan script Streamlit ini."
+            "Letakkan file **'Daftar Saham.xlsx'** di folder yang sama dengan script Streamlit ini."
         )
         return
 
