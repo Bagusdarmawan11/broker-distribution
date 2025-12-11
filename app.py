@@ -6,85 +6,266 @@ import os
 import requests
 import streamlit.components.v1 as components
 
-# ==========================================
-# 1. KONFIGURASI HALAMAN
-# ==========================================
+# =========================================================
+# 1. KONFIGURASI HALAMAN (dark mode only)
+# =========================================================
 st.set_page_config(
     page_title="Bandarmology Pro",
     page_icon="🦅",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# --- DATABASE BROKER (MAPPING) ---
-BROKER_DB = {
-    # ASING (FOREIGN) - HIJAU
-    'AK': {'name': 'UBS Sekuritas', 'type': 'Foreign'},
-    'BK': {'name': 'J.P. Morgan', 'type': 'Foreign'},
-    'ZP': {'name': 'Maybank Sekuritas', 'type': 'Foreign'},
-    'YU': {'name': 'CGS International', 'type': 'Foreign'},
-    'KZ': {'name': 'CLSA Sekuritas', 'type': 'Foreign'},
-    'RX': {'name': 'Macquarie', 'type': 'Foreign'},
-    'AI': {'name': 'UOB Kay Hian', 'type': 'Foreign'},
-    'CG': {'name': 'Citigroup', 'type': 'Foreign'},
-    'CS': {'name': 'Credit Suisse', 'type': 'Foreign'},
-    'MS': {'name': 'Morgan Stanley', 'type': 'Foreign'},
-    'GW': {'name': 'HSBC Sekuritas', 'type': 'Foreign'},
-    'AG': {'name': 'Kiwoom Sekuritas', 'type': 'Foreign'},
-    'BQ': {'name': 'Korea Investment', 'type': 'Foreign'},
+# =========================================================
+# 2. KONFIGURASI BROKER (NAMA + KELOMPOK)
+# =========================================================
+# --- NAMA BROKER (boleh kamu tambah kalau perlu) ---
+BROKER_NAMES = {
+    # BUMN
+    "CC": "Mandiri Sekuritas",
+    "DX": "Bahana Sekuritas",
+    "NI": "BNI Sekuritas",
+    "OD": "BRI Danareksa Sekuritas",
 
-    # BUMN (STATE OWNED) - KUNING/ORANGE
-    'CC': {'name': 'Mandiri Sekuritas', 'type': 'BUMN'},
-    'NI': {'name': 'BNI Sekuritas', 'type': 'BUMN'},
-    'OD': {'name': 'BRI Danareksa', 'type': 'BUMN'},
-    'DX': {'name': 'Bahana Sekuritas', 'type': 'BUMN'},
+    # ASING (contoh dari screenshot dan umum di BEI)
+    "AG": "Kiwoom Sekuritas Indonesia",
+    "AH": "Shinhan Sekuritas Indonesia",
+    "AI": "UOB Kay Hian Sekuritas",
+    "AK": "UBS Sekuritas Indonesia",
+    "BK": "J.P. Morgan Sekuritas Indonesia",
+    "BQ": "Korea Investment and Sekuritas Indonesia",
+    "CG": "Citigroup Sekuritas Indonesia",
+    "CP": "KB Valbury Sekuritas",
+    "CS": "Credit Suisse Sekuritas Indonesia",
+    "DR": "RHB Sekuritas Indonesia",
+    "FS": "Yuanta Sekuritas Indonesia",
+    "GI": "Webull Sekuritas Indonesia",
+    "GW": "HSBC Sekuritas Indonesia",
+    "HD": "KGI Sekuritas Indonesia",
+    "KI": "Ciptadana Sekuritas Asia",
+    "KK": "Phillip Sekuritas Indonesia",
+    "KZ": "CLSA Sekuritas Indonesia",
+    "RX": "Macquarie Sekuritas Indonesia",
+    "TP": "OCBC Sekuritas Indonesia",
+    "XA": "NH Korindo Sekuritas Indonesia",
+    "YP": "Mirae Asset Sekuritas Indonesia",
+    "YU": "CGS International Sekuritas Indonesia",
+    "ZP": "Maybank Sekuritas Indonesia",
 
-    # LOKAL (DOMESTIC) - UNGU/ABU
-    'YP': {'name': 'Mirae Asset', 'type': 'Local'},
-    'PD': {'name': 'Indo Premier', 'type': 'Local'},
-    'XL': {'name': 'Stockbit', 'type': 'Local'},
-    'XC': {'name': 'Ajaib', 'type': 'Local'},
-    'MG': {'name': 'Semesta Indovest', 'type': 'Local'},
-    'SQ': {'name': 'BCA Sekuritas', 'type': 'Local'},
-    'LG': {'name': 'Trimegah', 'type': 'Local'},
-    'EP': {'name': 'MNC Sekuritas', 'type': 'Local'},
-    'KK': {'name': 'Phillip Sekuritas', 'type': 'Local'},
-    'DR': {'name': 'RHB Sekuritas', 'type': 'Local'},
-    'GR': {'name': 'Panin Sekuritas', 'type': 'Local'},
-    'AZ': {'name': 'Sucor Sekuritas', 'type': 'Local'},
-    'BB': {'name': 'Verdhana', 'type': 'Local'},
-    'IF': {'name': 'Samuel Sekuritas', 'type': 'Local'},
-    'YJ': {'name': 'Lotus Andalan', 'type': 'Local'},
-    'LS': {'name': 'Reliance', 'type': 'Local'},
-    'CP': {'name': 'KB Valbury', 'type': 'Local'},
-    'RF': {'name': 'Buana Capital', 'type': 'Local'},
-    'HP': {'name': 'Henan Putihrai', 'type': 'Local'},
-    'DH': {'name': 'Sinarmas Sekuritas', 'type': 'Local'},
-    'IT': {'name': 'Inti Teladan', 'type': 'Local'},
-    'ID': {'name': 'Anugerah Sekuritas', 'type': 'Local'},
+    # LOKAL (contoh yang sering muncul)
+    "XL": "Stockbit Sekuritas Digital",
+    "PD": "Indo Premier Sekuritas",
+    "LG": "Trimegah Sekuritas Indonesia",
+    "MG": "Semesta Indovest Sekuritas",
+    "EP": "MNC Sekuritas",
+    "SQ": "BCA Sekuritas",
+    "BB": "Verdhana Sekuritas Indonesia",
+    "DH": "Sinarmas Sekuritas",
+    "AZ": "Sucor Sekuritas",
+    "DK": "KAF Sekuritas Indonesia",
+    "GR": "Panin Sekuritas Tbk.",
+    "ID": "Anugerah Sekuritas Indonesia",
+    "HP": "Henan Putihrai Sekuritas",
+    "IF": "Samuel Sekuritas Indonesia",
+    "MG": "Semesta Indovest Sekuritas",
+    "CP": "KB Valbury Sekuritas",  # sudah di FOREIGN_BROKERS, tapi nama tetap
+    "TP": "OCBC Sekuritas Indonesia",
+    "AP": "Pacific Sekuritas Indonesia",
+    "EL": "Evergreen Sekuritas Indonesia",
+    "SA": "Elit Sukses Sekuritas",
+    "IP": "Yugen Bertumbuh Sekuritas",
+    "SC": "IMG Sekuritas",
+    "DM": "Masindo Artha Sekuritas",
+    # dst... silakan tambah sendiri sesuai kebutuhan
 }
 
+# --- KELOMPOK BROKER: Asing / BUMN / Lokal ---
+FOREIGN_BROKERS = {
+    "AG", "AH", "AI", "AK", "BK", "BQ", "CG", "CP", "CS",
+    "DR", "FS", "GI", "GW", "HD", "KI", "KK", "KZ", "RX",
+    "TP", "XA", "YP", "YU", "ZP",
+    # Tambah lagi kalau di screenshot "Asing" ada kode lain
+}
+
+BUMN_BROKERS = {"CC", "DX", "NI", "OD"}
+
+def get_broker_group(code: str) -> str:
+    """Kembalikan kelompok broker: Asing / BUMN / Lokal."""
+    c = str(code).upper().strip()
+    if c in BUMN_BROKERS:
+        return "BUMN"
+    if c in FOREIGN_BROKERS:
+        return "Asing"
+    return "Lokal"
+
+def get_broker_info(code: str):
+    """Return (code, name, group)."""
+    c = str(code).upper().strip()
+    name = BROKER_NAMES.get(c, "Sekuritas Lain")
+    group = get_broker_group(c)
+    return c, name, group
+
+# Warna untuk group broker (dipakai di tabel + sankey + label)
 COLOR_MAP = {
-    'Foreign': '#00E396',
-    'BUMN': '#FEB019',
-    'Local': '#775DD0',
-    'Unknown': '#546E7A'
+    "Asing": "#ff4b4b",   # merah
+    "BUMN": "#22c55e",    # hijau
+    "Lokal": "#3b82f6",   # biru
+    "Unknown": "#6b7280", # abu
 }
 
-if 'authenticated' not in st.session_state:
-    st.session_state['authenticated'] = False
+# =========================================================
+# 3. STATE AWAL
+# =========================================================
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
 
+# =========================================================
+# 4. STYLING GLOBAL (DARK MODE ONLY)
+# =========================================================
+def inject_custom_css():
+    bg_color = "#050816"
+    sidebar_bg = "#0b1020"
+    text_color = "#f9fafb"
+    card_bg = "#111827"
+    border_color = "#1f2937"
+    input_bg = "#020617"
+    input_border = "#4b5563"
+    shadow = "rgba(0,0,0,0.6)"
+    btn_hover = "#f97316"
 
-# ==========================================
-# 2. HELPER & STYLING (DARK MODE ONLY)
-# ==========================================
+    st.markdown(
+        f"""
+        <style>
+        /* ============ BASE APP ============ */
+        .stApp {{
+            background-color: {bg_color};
+            color: {text_color};
+        }}
+        h1, h2, h3, h4, h5, h6, p, span, label, div, li {{
+            color: {text_color};
+        }}
 
-def get_broker_info(code):
-    code = str(code).upper().strip()
-    data = BROKER_DB.get(code, {'name': 'Sekuritas Lain', 'type': 'Unknown'})
-    return code, data['name'], data['type']
+        /* ============ SIDEBAR ============ */
+        [data-testid="stSidebar"] {{
+            background-color: {sidebar_bg} !important;
+            border-right: 1px solid {border_color};
+        }}
+        [data-testid="stSidebar"] * {{
+            color: {text_color} !important;
+        }}
 
+        /* ============ TEXT INPUT (PIN) ============ */
+        .stTextInput input {{
+            text-align: center;
+            font-size: 32px !important;
+            letter-spacing: 12px;
+            font-weight: 700;
+            padding: 16px;
+            border-radius: 14px;
+            background-color: {input_bg} !important;
+            color: {text_color} !important;
+            border: 2px solid {input_border} !important;
+            box-shadow: 0 14px 35px {shadow};
+            transition: all 0.25s ease;
+        }}
+        .stTextInput input:focus {{
+            border-color: #22c55e !important;
+            box-shadow: 0 0 0 1px #22c55e;
+        }}
 
+        /* ============ BUTTONS ============ */
+        .stButton button {{
+            width: 100%;
+            height: 46px;
+            font-size: 15px;
+            font-weight: 600;
+            border-radius: 12px;
+            border: 1px solid {border_color};
+            background: linear-gradient(135deg, #111827, #020617);
+            color: {text_color} !important;
+            transition: all 0.2s ease;
+        }}
+        .stButton button:hover {{
+            transform: translateY(-1px);
+            border-color: {btn_hover};
+            box-shadow: 0 10px 25px {shadow};
+        }}
+
+        /* ============ DATAFRAME SCROLL ============ */
+        .stDataFrame {{
+            border-radius: 12px;
+            overflow: hidden;
+        }}
+
+        /* ============ TICKER & TAG ============ */
+        .tag {{
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 700;
+            display: inline-block;
+            margin-right: 6px;
+        }}
+        .tag-Asing {{ background-color: {COLOR_MAP["Asing"]}; color: #111827; }}
+        .tag-BUMN {{ background-color: {COLOR_MAP["BUMN"]}; color: #052e16; }}
+        .tag-Lokal {{ background-color: {COLOR_MAP["Lokal"]}; color: #e5e7eb; }}
+
+        .insight-box {{
+            background-color: {card_bg};
+            padding: 18px 20px;
+            border-radius: 14px;
+            border-left: 4px solid {COLOR_MAP["Asing"]};
+            margin-top: 16px;
+            margin-bottom: 40px;
+            box-shadow: 0 10px 30px {shadow};
+            border: 1px solid {border_color};
+        }}
+
+        /* ============ FOOTER ============ */
+        .footer {{
+            position: fixed;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            background: #020617;
+            text-align: center;
+            padding: 8px 0;
+            font-size: 11px;
+            border-top: 1px solid {border_color};
+            z-index: 999;
+        }}
+        .footer span {{ color: #9ca3af !important; }}
+
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def hide_sidebar():
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] {display: none !important;}
+        [data-testid="collapsedControl"] {display: none !important;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def show_sidebar():
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] {display: block !important;}
+        [data-testid="collapsedControl"] {display: block !important;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# =========================================================
+# 5. TOOLS LAIN (YAHOO TICKER, FORMAT, DLL)
+# =========================================================
 def format_number_label(value):
     abs_val = abs(value)
     if abs_val >= 1e12:
@@ -95,258 +276,15 @@ def format_number_label(value):
         return f"{value/1e6:.2f}Jt"
     return f"{value:,.0f}"
 
-
-def inject_custom_css() -> None:
-    """Tema dark statis (tanpa toggle)."""
-    bg_color = "#0b1020"
-    sidebar_bg = "#111827"
-    text_color = "#F9FAFB"
-    card_bg = "#020617"
-    border_color = "#1F2937"
-    input_bg = "#020617"
-    input_border = "#4B5563"
-    shadow = "rgba(0,0,0,0.65)"
-    btn_hover = "#f97316"
-
-    st.markdown(
-        f"""
-        <style>
-        .stApp {{
-            background-color: {bg_color};
-            color: {text_color};
-        }}
-
-        [data-testid="stAppViewContainer"] {{
-            background-color: {bg_color};
-        }}
-        [data-testid="stHeader"] {{
-            background-color: {bg_color};
-            color: {text_color};
-        }}
-
-        [data-testid="stAppViewContainer"] .block-container {{
-            padding-top: 2.5rem;
-            padding-bottom: 4.5rem;
-        }}
-
-        [data-testid="stSidebar"] {{
-            background-color: {sidebar_bg} !important;
-            border-right: 1px solid {border_color};
-        }}
-        [data-testid="stSidebar"] * {{
-            color: {text_color} !important;
-        }}
-
-        h1, h2, h3, h4, h5, h6,
-        p, li, span, label, div, .stMarkdown, .stText {{
-            color: {text_color} !important;
-        }}
-
-        a {{ color: #38BDF8 !important; }}
-        a:hover {{ text-decoration: underline; }}
-
-        .app-card {{
-            background-color: {card_bg};
-            border-radius: 18px;
-            padding: 24px 28px;
-            border: 1px solid {border_color};
-            box-shadow: 0 18px 45px {shadow};
-        }}
-        .app-card--center {{
-            max-width: 520px;
-            margin: 0 auto;
-        }}
-
-        .page-header {{
-            margin-bottom: 1.25rem;
-        }}
-        .page-header h1 {{
-            font-size: 1.7rem;
-            margin-bottom: 0.2rem;
-        }}
-        .page-header p {{
-            opacity: 0.7;
-            font-size: 0.9rem;
-        }}
-
-        .stTextInput input {{
-            text-align: center;
-            font-size: 32px !important;
-            letter-spacing: 10px;
-            font-weight: bold;
-            padding: 14px 18px;
-            border-radius: 12px;
-            background-color: {input_bg} !important;
-            color: {text_color} !important;
-            border: 2px solid {input_border} !important;
-            box-shadow: 0 4px 14px {shadow};
-            transition: all 0.25s ease;
-        }}
-        .stTextInput input::placeholder {{
-            color: rgba(148,163,184,0.9) !important;
-        }}
-        .stTextInput input:focus {{
-            border-color: {btn_hover} !important;
-            outline: none;
-            box-shadow: 0 0 8px rgba(249,115,22,0.55);
-        }}
-
-        div[data-baseweb="select"] > div {{
-            background-color: {input_bg} !important;
-            color: {text_color} !important;
-            border-color: {input_border} !important;
-            border-radius: 12px;
-            min-height: 42px;
-        }}
-        div[data-baseweb="select"] span {{
-            color: {text_color} !important;
-        }}
-        ul[data-baseweb="menu"] {{
-            background-color: {card_bg} !important;
-            border-radius: 10px;
-        }}
-        li[data-baseweb="option"] {{
-            color: {text_color} !important;
-        }}
-
-        .stButton button {{
-            width: 100%;
-            height: 46px;
-            font-size: 15px;
-            font-weight: 600;
-            border-radius: 10px;
-            border: 1px solid {border_color};
-            background-color: #0F172A !important;
-            color: #F9FAFB !important;
-            transition: all 0.2s;
-        }}
-        .stButton button:hover {{
-            border-color: {btn_hover};
-            background-color: #111827 !important;
-            color: {btn_hover} !important;
-        }}
-
-        [data-testid="stMetric"] {{
-            background-color: {card_bg};
-            padding: 12px 16px;
-            border-radius: 14px;
-            border: 1px solid {border_color};
-            box-shadow: 0 3px 12px {shadow};
-        }}
-
-        .stDataFrame, .stTable {{
-            border-radius: 12px;
-            overflow: hidden;
-            border: 1px solid {border_color};
-        }}
-
-        [data-testid="stNotification"] > div {{
-            background-color: {card_bg} !important;
-            border-radius: 12px;
-            border: 1px solid {border_color};
-            box-shadow: 0 3px 10px {shadow};
-        }}
-
-        .empty-state {{
-            background-color: {card_bg};
-            border-radius: 18px;
-            border: 1px dashed {border_color};
-            padding: 32px 30px;
-            text-align: center;
-            margin-top: 2rem;
-            box-shadow: 0 16px 40px {shadow};
-        }}
-        .empty-state h2 {{
-            margin-bottom: 0.4rem;
-        }}
-        .empty-state p {{
-            font-size: 0.92rem;
-            opacity: 0.8;
-        }}
-
-        .ticker-wrap {{
-            width: 100%;
-            background-color: {card_bg};
-            padding: 8px 0;
-            border-bottom: 1px solid {border_color};
-            position: sticky;
-            top: 0;
-            z-index: 20;
-            box-shadow: 0 2px 5px {shadow};
-        }}
-        .ticker-item {{
-            margin: 0 20px;
-            font-weight: bold;
-            font-family: monospace;
-            font-size: 14px;
-            color: {text_color};
-        }}
-
-        .tag {{
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: bold;
-            color: white !important;
-            display: inline-block;
-            margin-right: 6px;
-        }}
-        .tag-Foreign {{ background-color: {COLOR_MAP['Foreign']}; }}
-        .tag-BUMN {{ background-color: {COLOR_MAP['BUMN']}; color: black !important; }}
-        .tag-Local {{ background-color: {COLOR_MAP['Local']}; }}
-
-        .insight-box {{
-            background-color: {card_bg};
-            padding: 18px 20px;
-            border-radius: 12px;
-            border-left: 6px solid {COLOR_MAP['Foreign']};
-            margin-top: 18px;
-            margin-bottom: 50px;
-            box-shadow: 0 2px 8px {shadow};
-            border: 1px solid {border_color};
-            font-size: 0.95rem;
-        }}
-
-        .footer {{
-            position: fixed;
-            left: 0;
-            bottom: 0;
-            width: 100%;
-            background: {card_bg};
-            text-align: center;
-            padding: 8px 12px;
-            font-size: 11px;
-            border-top: 1px solid {border_color};
-            z-index: 1000;
-            color: {text_color} !important;
-        }}
-
-        [data-testid="stBottomBlockContainer"] {{
-            padding-bottom: 3.5rem;
-        }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-# ==========================================
-# 3. KONEKSI DATA (OPTIONAL)
-# ==========================================
-
 def get_yahoo_session():
     session = requests.Session()
     session.headers.update(
         {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
     )
     return session
-
 
 @st.cache_data(ttl=120)
 def get_stock_ticker():
@@ -356,7 +294,12 @@ def get_stock_ticker():
         tickers = ["BBCA", "BBRI", "BMRI", "BBNI", "TLKM", "ASII", "GOTO", "BUMI", "ADRO", "PGAS"]
         yf_tickers = [f"{t}.JK" for t in tickers]
 
-        data = yf.download(yf_tickers, period="2d", progress=False, session=get_yahoo_session())["Close"]
+        data = yf.download(
+            yf_tickers,
+            period="2d",
+            progress=False,
+            session=get_yahoo_session(),
+        )["Close"]
         if data.empty:
             return "<div class='ticker-wrap'>Market Data Offline</div>"
 
@@ -372,7 +315,7 @@ def get_stock_ticker():
                     continue
                 chg = p_now - p_prev
                 pct = (chg / p_prev) * 100 if p_prev != 0 else 0
-                cls = "#00E396" if chg >= 0 else "#FF4560"
+                cls = "#22c55e" if chg >= 0 else "#f97316"
                 sgn = "+" if chg >= 0 else ""
                 html += (
                     f"<span class='ticker-item'>{t} {int(p_now):,} "
@@ -386,12 +329,10 @@ def get_stock_ticker():
     except Exception:
         return "<div class='ticker-wrap'>Connection Limited</div>"
 
-
-# ==========================================
-# 4. DATA PROCESSING
-# ==========================================
-
-def clean_running_trade(df_input: pd.DataFrame) -> pd.DataFrame:
+# =========================================================
+# 6. DATA PROCESSING
+# =========================================================
+def clean_running_trade(df_input):
     df = df_input.copy()
     df.columns = df.columns.str.strip().str.capitalize()
 
@@ -430,10 +371,9 @@ def clean_running_trade(df_input: pd.DataFrame) -> pd.DataFrame:
         df["Value"] = df["Lot_Clean"] * 100 * df["Price_Clean"]
         return df[df["Value"] > 0]
     except Exception as e:
-        raise ValueError(f"Parsing Error: {e}") from e
+        raise ValueError(f"Parsing Error: {e}")
 
-
-def get_broker_summary(df: pd.DataFrame) -> pd.DataFrame:
+def get_broker_summary(df):
     buy = (
         df.groupby("Buyer_Code")
         .agg({"Value": "sum", "Lot_Clean": "sum"})
@@ -452,12 +392,11 @@ def get_broker_summary(df: pd.DataFrame) -> pd.DataFrame:
     summ.index.name = "Code"
     summ = summ.reset_index()
     summ["Name"] = summ["Code"].apply(lambda x: get_broker_info(x)[1])
-    summ["Type"] = summ["Code"].apply(lambda x: get_broker_info(x)[2])
+    summ["Group"] = summ["Code"].apply(lambda x: get_broker_info(x)[2])
 
     return summ.sort_values("Net_Val", ascending=False)
 
-
-def build_sankey(df: pd.DataFrame, top_n: int = 15, metric: str = "Value"):
+def build_sankey(df, top_n=15, metric="Value"):
     flow = df.groupby(["Buyer_Code", "Seller_Code"])[metric].sum().reset_index()
     flow = flow.sort_values(metric, ascending=False).head(top_n)
 
@@ -472,8 +411,8 @@ def build_sankey(df: pd.DataFrame, top_n: int = 15, metric: str = "Value"):
     labels, colors = [], []
     for node in all_nodes:
         code = node.split()[0]
-        b_type = get_broker_info(code)[2]
-        color = COLOR_MAP.get(b_type, "#888")
+        group = get_broker_group(code)
+        color = COLOR_MAP.get(group, COLOR_MAP["Unknown"])
         val = b_totals[node] if node in b_totals else s_totals.get(node, 0)
         labels.append(f"{code} {format_number_label(val)}")
         colors.append(color)
@@ -482,16 +421,15 @@ def build_sankey(df: pd.DataFrame, top_n: int = 15, metric: str = "Value"):
     tgt = [node_map[x] for x in flow["S_Label"]]
     vals = flow[metric].tolist()
 
-    l_colors = []
+    link_colors = []
     for s_idx in src:
         c_hex = colors[s_idx].lstrip("#")
-        rgb = tuple(int(c_hex[i:i+2], 16) for i in (0, 2, 4))
-        l_colors.append(f"rgba({rgb[0]},{rgb[1]},{rgb[2]},0.6)")
+        rgb = tuple(int(c_hex[i : i + 2], 16) for i in (0, 2, 4))
+        link_colors.append(f"rgba({rgb[0]},{rgb[1]},{rgb[2]},0.55)")
 
-    return labels, colors, src, tgt, vals, l_colors
+    return labels, colors, src, tgt, vals, link_colors
 
-
-def generate_smart_insight(summary_df: pd.DataFrame) -> str:
+def generate_smart_insight(summary_df):
     top_buyer = summary_df.iloc[0]
     top_seller = summary_df.iloc[-1]
 
@@ -504,24 +442,24 @@ def generate_smart_insight(summary_df: pd.DataFrame) -> str:
 
     return f"""
     ### 🧠 AI Insight: {action}
-    **Top Buyer:** {top_buyer['Code']} ({top_buyer['Type']}) - Net Buy: Rp {format_number_label(top_buyer['Net_Val'])}  
-    **Top Seller:** {top_seller['Code']} ({top_seller['Type']}) - Net Sell: Rp {format_number_label(abs(top_seller['Net_Val']))}
+    **Top Buyer:** {top_buyer['Code']} ({top_buyer['Group']}) - Net Buy: Rp {format_number_label(top_buyer['Net_Val'])}  
+    **Top Seller:** {top_seller['Code']} ({top_seller['Group']}) - Net Sell: Rp {format_number_label(abs(top_seller['Net_Val']))}
     """
 
-
-# ==========================================
-# 5. UI PAGES
-# ==========================================
-
-def login_page() -> None:
+# =========================================================
+# 7. HALAMAN LOGIN (PIN TANPA SIDEBAR)
+# =========================================================
+def login_page():
     inject_custom_css()
+    hide_sidebar()
 
-    # paksa keyboard numerik
+    # agar input PIN numeric only
     components.html(
         """
         <script>
-        const i = window.parent.document.querySelectorAll('input[type="password"]');
-        i.forEach(e => {
+        const frame = window.parent.document;
+        const inputs = frame.querySelectorAll('input[type="password"]');
+        inputs.forEach(e => {
             e.setAttribute('inputmode','numeric');
             e.setAttribute('pattern','[0-9]*');
         });
@@ -530,55 +468,78 @@ def login_page() -> None:
         height=0,
     )
 
-    _, center, _ = st.columns([1, 2, 1])
-    with center:
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 2.2, 1])
+
+    with c2:
         st.markdown(
             """
-            <div class="app-card app-card--center" style="margin-top:3rem;">
-                <div style="text-align:center; margin-bottom:1.5rem;">
-                    <div style="font-size:40px; margin-bottom:0.5rem;">🦅</div>
-                    <h2 style="margin-bottom:0.2rem;">SECURE ACCESS</h2>
-                    <p style="font-size:0.9rem; opacity:0.75;">
-                        Masukkan PIN rahasia untuk membuka fitur Bandarmology Pro.
-                    </p>
-                </div>
+            <div style="
+                background: radial-gradient(circle at top left, #1f2937, #020617);
+                padding: 32px 32px 26px 32px;
+                border-radius: 18px;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.75);
+                text-align: center;">
+                <div style="font-size:44px;margin-bottom:8px;">🦅</div>
+                <h2 style="margin-bottom:4px;">SECURE ACCESS</h2>
+                <p style="font-size:14px;color:#9ca3af;margin-bottom:12px;">
+                    Masukkan PIN rahasia untuk membuka fitur Bandarmology Pro.
+                </p>
+            </div>
             """,
             unsafe_allow_html=True,
         )
 
+        st.write("")
         with st.form("login_form"):
             pin = st.text_input(
                 "PIN",
                 type="password",
+                max_chars=6,
                 placeholder="0 0 0 0 0 0",
-                label_visibility="collapsed",
-                key="pin_input",
             )
-            submit = st.form_submit_button("UNLOCK", key="unlock_button")
+            submitted = st.form_submit_button("UNLOCK")
 
-        if submit:
+        if submitted:
             if pin == "241130":
                 st.session_state["authenticated"] = True
+                show_sidebar()
                 st.rerun()
             else:
-                st.error("PIN yang kamu masukkan salah. Coba lagi ya 🔐")
+                st.error("PIN salah, coba lagi.")
 
-        st.markdown("</div>", unsafe_allow_html=True)
+    # footer
+    st.markdown(
+        "<div class='footer'><span>© 2025 PT Catindo Bagus Perkasa | Bandarmology Pro (Dark)</span></div>",
+        unsafe_allow_html=True,
+    )
 
-
-def bandarmology_page() -> None:
+# =========================================================
+# 8. HALAMAN UTAMA (BANDARMOLOGY)
+# =========================================================
+def bandarmology_page():
     inject_custom_css()
+    show_sidebar()
+
     DB_ROOT = "database"
 
-    # SIDEBAR DATA SOURCE
+    # ------------- SIDEBAR -------------
     with st.sidebar:
-        st.subheader("📂 Sumber Data")
+        st.title("🦅 Bandarmology")
+        st.caption("Bandarmology Pro Dashboard")
+        st.markdown("---")
+
+        if st.button("Logout", use_container_width=True):
+            st.session_state["authenticated"] = False
+            st.rerun()
+
+        st.markdown("### 📂 Sumber Data")
         source_type = st.radio(
-            "Tipe:",
+            "Sumber Data",
             ["Database Folder", "Upload Manual"],
-            label_visibility="collapsed",
-            key="source_type_radio",
+            index=0,
         )
+
         df_raw = None
         current_stock = "UNKNOWN"
 
@@ -591,16 +552,16 @@ def bandarmology_page() -> None:
                         if os.path.isdir(os.path.join(DB_ROOT, d))
                     ]
                 )
-                sel_stock = st.selectbox("Saham", stocks, key="stock_select") if stocks else None
+                sel_stock = st.selectbox("Saham", stocks) if stocks else None
                 if sel_stock:
                     p_stock = os.path.join(DB_ROOT, sel_stock)
                     years = sorted(os.listdir(p_stock))
-                    sel_year = st.selectbox("Tahun", years, key="year_select") if years else None
+                    sel_year = st.selectbox("Tahun", years) if years else None
                     if sel_year:
                         p_year = os.path.join(p_stock, sel_year)
                         months = sorted(os.listdir(p_year))
                         sel_month = (
-                            st.selectbox("Bulan", months, key="month_select") if months else None
+                            st.selectbox("Bulan", months) if months else None
                         )
                         if sel_month:
                             p_month = os.path.join(p_year, sel_month)
@@ -611,11 +572,8 @@ def bandarmology_page() -> None:
                                     if f.endswith(("csv", "xlsx"))
                                 ]
                             )
-                            sel_file = st.selectbox("Tanggal", files, key="date_select") if files else None
-                            if (
-                                sel_file
-                                and st.button("Load Data", use_container_width=True, key="btn_load_data")
-                            ):
+                            sel_file = st.selectbox("Tanggal", files) if files else None
+                            if sel_file and st.button("Load Data"):
                                 fp = os.path.join(p_month, sel_file)
                                 try:
                                     if fp.endswith("csv"):
@@ -624,136 +582,152 @@ def bandarmology_page() -> None:
                                         df_raw = pd.read_excel(fp)
                                     current_stock = sel_stock
                                 except Exception:
-                                    st.error("Gagal membaca file. Cek format datanya.")
+                                    st.error("Gagal load data, cek file-nya.")
             else:
-                st.warning(f"Buat dulu folder '{DB_ROOT}' di samping script aplikasi.")
+                st.warning(f"Folder database '{DB_ROOT}' belum dibuat.")
         else:
-            uploaded = st.file_uploader(
-                "Upload File Running Trade", type=["csv", "xlsx"], key="uploader_file"
-            )
+            uploaded = st.file_uploader("Upload File Running Trade", type=["csv", "xlsx"])
             if uploaded:
                 try:
                     if uploaded.name.endswith("csv"):
                         df_raw = pd.read_csv(uploaded)
                     else:
                         df_raw = pd.read_excel(uploaded)
-                    current_stock = uploaded.name.split(".")[0].upper()
+                    current_stock = "UPLOADED"
                 except Exception:
-                    st.error("File tidak bisa dibaca. Pastikan formatnya benar ya 😊")
+                    st.error("File tidak dapat dibaca, cek formatnya.")
 
-    # MAIN CONTENT
-    if df_raw is not None:
+    # ------------- MAIN CONTENT -------------
+    if df_raw is None:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div style="
+                background-color:#020617;
+                padding:40px 30px;
+                border-radius:18px;
+                margin:0 4%;
+                border:1px dashed #283548;
+                text-align:center;
+                box-shadow:0 18px 45px rgba(0,0,0,0.65);">
+                <h2 style="margin-bottom:6px;">Belum ada data yang dipilih 📁</h2>
+                <p style="color:#9ca3af;font-size:14px;">
+                    Pilih sumber data dan file running trade di sidebar untuk mulai analisis bandarmology saham kamu.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
         try:
             df = clean_running_trade(df_raw)
             summ = get_broker_summary(df)
 
-            st.markdown(
-                f"""
-                <div class="page-header">
-                    <h1>📊 Bandarmology {current_stock}</h1>
-                    <p>Distribusi dan akumulasi broker berdasarkan transaksi running trade.</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            st.title(f"📊 Bandarmology {current_stock}")
 
-            c1, c2, c3 = st.columns(3)
+            # --- METRIC ---
+            col1, col2, col3 = st.columns(3)
             tot_val = df["Value"].sum()
-            c1.metric("Total Nilai Transaksi", f"Rp {format_number_label(tot_val)}")
-            c2.metric("Total Volume", f"{df['Lot_Clean'].sum():,.0f} Lot")
-            f_share = (
-                summ[summ["Type"] == "Foreign"]["Total_Val"].sum() / (tot_val * 2) * 100
-                if tot_val > 0
-                else 0
-            )
-            c3.metric("Porsi Asing", f"{f_share:.1f}%")
+            col1.metric("Total Transaksi", f"Rp {format_number_label(tot_val)}")
+            col2.metric("Total Volume", f"{df['Lot_Clean'].sum():,} Lot")
+
+            foreign_val = summ[summ["Group"] == "Asing"]["Total_Val"].sum()
+            share_foreign = foreign_val / (tot_val * 2) * 100 if tot_val > 0 else 0
+            col3.metric("Porsi Asing", f"{share_foreign:.1f}%")
 
             st.markdown("---")
 
+            # --- TOP BROKER TABLE ---
             st.subheader("🏆 Top Broker")
+
+            def style_broker_code(val):
+                group = get_broker_group(val)
+                color = COLOR_MAP.get(group, COLOR_MAP["Unknown"])
+                return f"color:{color}; font-weight:700;"
+
             tabs = st.tabs(["Semua", "Asing", "BUMN", "Lokal"])
-            cats = ["All", "Foreign", "BUMN", "Local"]
+            group_labels = ["ALL", "Asing", "BUMN", "Lokal"]
 
-            def color_net(val):
-                if val > 0:
-                    return "color:#00E396; font-weight:bold;"
-                elif val < 0:
-                    return "color:#FF4560; font-weight:bold;"
-                return "color:inherit;"
-
-            for tab, cat in zip(tabs, cats):
+            for tab, g in zip(tabs, group_labels):
                 with tab:
-                    if cat == "All":
-                        d = summ
+                    if g == "ALL":
+                        df_show = summ.copy()
                     else:
-                        d = summ[summ["Type"] == cat]
-                    if not d.empty:
+                        df_show = summ[summ["Group"] == g].copy()
+
+                    if df_show.empty:
+                        st.info("Belum ada broker di kategori ini.")
+                    else:
                         st.dataframe(
-                            d[["Code", "Name", "Total_Val", "Net_Val"]]
+                            df_show[
+                                ["Code", "Name", "Group", "Total_Val", "Net_Val"]
+                            ]
+                            .sort_values("Total_Val", ascending=False)
                             .style.format(
                                 {
                                     "Total_Val": format_number_label,
                                     "Net_Val": format_number_label,
                                 }
                             )
-                            .map(color_net, subset=["Net_Val"]),
+                            .applymap(style_broker_code, subset=["Code"]),
                             use_container_width=True,
-                            height=350,
+                            height=360,
                         )
-                    else:
-                        st.info("Belum ada data broker di kategori ini.")
 
-            st.subheader("🕸️ Broker Flow Map")
-            sc1, sc2 = st.columns([2, 1])
-            with sc1:
-                met = st.radio(
-                    "Metrik visualisasi",
-                    ["Value (Dana)", "Lot (Barang)"],
+            st.subheader("🕸️ Broker Flow (Sankey)")
+
+            left, right = st.columns([2, 1])
+            with left:
+                metric_choice = st.radio(
+                    "Metrik",
+                    ["Value (Dana)", "Lot (Volume)"],
                     horizontal=True,
-                    key="metric_radio",
                 )
-            with sc2:
-                top_n = st.slider("Jumlah interaksi", 5, 50, 15, key="topn_slider")
+            with right:
+                top_n = st.slider("Jumlah interaksi", 5, 50, 15)
 
-            met_col = "Value" if "Value" in met else "Lot_Clean"
+            metric_col = "Value" if "Value" in metric_choice else "Lot_Clean"
 
             try:
-                lbl, col, src, tgt, val, l_col = build_sankey(df, top_n, met_col)
+                labels, node_colors, src, tgt, vals, link_colors = build_sankey(
+                    df, top_n=top_n, metric=metric_col
+                )
                 fig = go.Figure(
                     data=[
                         go.Sankey(
                             node=dict(
                                 pad=20,
-                                thickness=20,
-                                line=dict(color="white", width=0.4),
-                                label=lbl,
-                                color=col,
+                                thickness=18,
+                                line=dict(color="black", width=0.3),
+                                label=labels,
+                                color=node_colors,
                             ),
                             link=dict(
                                 source=src,
                                 target=tgt,
-                                value=val,
-                                color=l_col,
+                                value=vals,
+                                color=link_colors,
                             ),
                         )
                     ]
                 )
-
                 fig.update_layout(
                     height=600,
                     margin=dict(l=10, r=10, t=10, b=10),
-                    font=dict(size=12, color="white"),
+                    font=dict(size=12, color="#e5e7eb"),
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
                 )
-
                 st.plotly_chart(fig, use_container_width=True)
+
                 st.markdown(
-                    "<div style='text-align:center;margin-top:0.4rem;'>"
-                    "<span class='tag tag-Foreign'>ASING</span>"
-                    "<span class='tag tag-BUMN'>BUMN</span>"
-                    "<span class='tag tag-Local'>LOKAL</span>"
-                    "</div>",
+                    """
+                    <div style="text-align:center;margin-top:-10px;">
+                        <span class="tag tag-Asing">Asing</span>
+                        <span class="tag tag-BUMN">BUMN</span>
+                        <span class="tag tag-Lokal">Lokal</span>
+                    </div>
+                    """,
                     unsafe_allow_html=True,
                 )
                 st.markdown(
@@ -761,60 +735,24 @@ def bandarmology_page() -> None:
                     unsafe_allow_html=True,
                 )
             except Exception as e:
-                st.warning(f"Gagal membuat visualisasi flow: {e}")
+                st.warning(f"Error pada visual Sankey: {e}")
 
         except Exception as e:
-            st.error(f"Terjadi error saat memproses data: {e}")
-    else:
-        st.markdown(
-            """
-            <div class="empty-state">
-                <h2>Belum ada data yang dipilih 📂</h2>
-                <p>Pilih sumber data dan file running trade di sidebar untuk mulai analisis
-                bandarmology saham kamu.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
-# ==========================================
-# 6. MAIN APP
-# ==========================================
-
-def main():
-    inject_custom_css()
-
-    with st.sidebar:
-        if st.session_state["authenticated"]:
-            st.markdown(
-                "<h2 style='margin-bottom:0.2rem;'>🦅 Bandarmology</h2>",
-                unsafe_allow_html=True,
-            )
-            st.caption("Bandarmology Pro Dashboard")
-            st.divider()
-            if st.button("Logout", use_container_width=True, key="btn_logout_main"):
-                st.session_state["authenticated"] = False
-                st.rerun()
-        else:
-            st.markdown(
-                "<h2 style='margin-bottom:0.2rem;'>Pengaturan</h2>",
-                unsafe_allow_html=True,
-            )
-            st.caption("Atur tampilan & akses aplikasi")
-
-    if st.session_state["authenticated"]:
-        # kalau mau ticker:
-        # st.markdown(get_stock_ticker(), unsafe_allow_html=True)
-        bandarmology_page()
-    else:
-        login_page()
+            st.error(f"Error saat memproses data: {e}")
 
     st.markdown(
-        "<div class='footer'>© 2025 PT Catindo Bagus Perkasa | Bandarmology Pro (Dark)</div>",
+        "<div class='footer'><span>© 2025 PT Catindo Bagus Perkasa | Bandarmology Pro (Dark)</span></div>",
         unsafe_allow_html=True,
     )
 
+# =========================================================
+# 9. MAIN ROUTER
+# =========================================================
+def main():
+    if not st.session_state["authenticated"]:
+        login_page()
+    else:
+        bandarmology_page()
 
 if __name__ == "__main__":
     main()
