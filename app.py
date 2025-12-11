@@ -958,7 +958,7 @@ def daftar_broker_page():
 def load_daftar_saham():
     """
     Load file daftar saham.
-    Pastikan file 'Daftar Saham  - 20251211.xlsx' ada di folder yang sama dengan app.
+    Pastikan file 'Daftar Saham.xlsx' ada di folder yang sama dengan app.
     """
     fname = "Daftar Saham  - 20251211.xlsx"
     if os.path.exists(fname):
