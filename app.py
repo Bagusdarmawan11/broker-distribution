@@ -578,7 +578,7 @@ def login_page():
     )
 
     st.markdown("<br><br>", unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([1, 2.2, 1])
+    _, c2, _ = st.columns([1, 2.2, 1])
 
     with c2:
         st.markdown(
@@ -642,6 +642,7 @@ def bandarmology_page():
 
         if source_type == "Database Folder":
             if os.path.exists(DB_ROOT):
+                # level 1: daftar saham (folder)
                 stocks = sorted(
                     [
                         d
@@ -649,19 +650,54 @@ def bandarmology_page():
                         if os.path.isdir(os.path.join(DB_ROOT, d))
                     ]
                 )
-                sel_stock = st.selectbox("Saham", stocks, key="stock_sel") if stocks else None
+                sel_stock = (
+                    st.selectbox("Saham", stocks, key="stock_sel") if stocks else None
+                )
+
+                if not stocks:
+                    st.info("Folder database kosong. Gunakan 'Upload Manual' atau isi struktur foldernya.")
                 if sel_stock:
                     p_stock = os.path.join(DB_ROOT, sel_stock)
-                    years = sorted(os.listdir(p_stock))
-                    sel_year = st.selectbox("Tahun", years, key="year_sel") if years else None
+
+                    # level 2: tahun (folder)
+                    years = sorted(
+                        [
+                            d
+                            for d in os.listdir(p_stock)
+                            if os.path.isdir(os.path.join(p_stock, d))
+                        ]
+                    )
+                    sel_year = (
+                        st.selectbox("Tahun", years, key="year_sel") if years else None
+                    )
+
+                    if years == []:
+                        st.info("Folder saham ini belum punya subfolder tahun.")
+
                     if sel_year:
-                        p_year = os.path.join(DB_ROOT, sel_year)
-                        months = sorted(os.listdir(p_year))
-                        sel_month = (
-                            st.selectbox("Bulan", months, key="month_sel") if months else None
+                        p_year = os.path.join(p_stock, sel_year)
+
+                        # level 3: bulan (folder)
+                        months = sorted(
+                            [
+                                d
+                                for d in os.listdir(p_year)
+                                if os.path.isdir(os.path.join(p_year, d))
+                            ]
                         )
+                        sel_month = (
+                            st.selectbox("Bulan", months, key="month_sel")
+                            if months
+                            else None
+                        )
+
+                        if months == []:
+                            st.info("Folder tahun ini belum punya subfolder bulan.")
+
                         if sel_month:
                             p_month = os.path.join(p_year, sel_month)
+
+                            # level 4: file csv/xlsx
                             files = sorted(
                                 [
                                     f
@@ -669,12 +705,19 @@ def bandarmology_page():
                                     if f.endswith(("csv", "xlsx"))
                                 ]
                             )
-                            sel_file = st.selectbox(
-                                "Tanggal", files, key="file_sel"
-                            ) if files else None
+                            sel_file = (
+                                st.selectbox("Tanggal", files, key="file_sel")
+                                if files
+                                else None
+                            )
+
+                            if files == []:
+                                st.info("Folder bulan ini belum ada file CSV/XLSX.")
+
                             load_btn = st.button(
                                 "Load Data", use_container_width=True, key="load_btn"
                             )
+
                             if sel_file and load_btn:
                                 fp = os.path.join(p_month, sel_file)
                                 try:
@@ -852,7 +895,6 @@ def bandarmology_page():
 def daftar_broker_page():
     st.title("📚 Daftar Broker / Sekuritas")
 
-    # Siapkan DataFrame master broker
     rows = []
     for code, name in BROKER_NAMES.items():
         group = get_broker_group(code)
@@ -916,17 +958,11 @@ def daftar_broker_page():
 def load_daftar_saham():
     """
     Load file daftar saham.
-    Pastikan file 'Daftar Saham.xlsx' ada di folder yang sama dengan app.
-    Kalau namanya berbeda, silakan sesuaikan di sini.
+    Pastikan file 'Daftar Saham  - 20251211.xlsx' ada di folder yang sama dengan app.
     """
-    candidates = [
-        "Daftar Saham  - 20251211.xlsx",
-        "Daftar Saham-20251211.xlsx",
-        "Daftar Saham.xlsx",
-    ]
-    for fname in candidates:
-        if os.path.exists(fname):
-            return pd.read_excel(fname)
+    fname = "Daftar Saham  - 20251211.xlsx"
+    if os.path.exists(fname):
+        return pd.read_excel(fname)
     raise FileNotFoundError(
         "File 'Daftar Saham  - 20251211.xlsx' tidak ditemukan di folder aplikasi."
     )
@@ -948,7 +984,6 @@ def daftar_saham_page():
     if "No" in df.columns:
         df = df.drop(columns=["No"])
 
-    # Pastikan nama kolom standar
     rename_map = {
         "Kode": "Kode",
         "Nama Perusahaan": "Nama Perusahaan",
@@ -958,7 +993,6 @@ def daftar_saham_page():
     }
     df = df.rename(columns=rename_map)
 
-    # Parsing tanggal kalau bisa
     if "Tanggal Pencatatan" in df.columns:
         df["Tanggal Pencatatan"] = pd.to_datetime(
             df["Tanggal Pencatatan"], errors="ignore"
@@ -1008,7 +1042,6 @@ def daftar_saham_page():
             .str.contains(q)
         ]
 
-    # Urut abjad berdasarkan kode
     if "Kode" in df_filtered.columns:
         df_filtered = df_filtered.sort_values("Kode")
 
