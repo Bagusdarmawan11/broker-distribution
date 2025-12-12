@@ -492,43 +492,47 @@ def _resolve_month_folder(p_year: str, month: int) -> str | None:
             return d
     return None
 
-def _resolve_daily_file(p_month: str, dt_date) -> str | None:
+
+def _resolve_daily_files(p_month: str, dt_date) -> list[str]:
+    """Cari *semua* file harian yang match (bukan hanya 1 file).
+    Ini penting kalau data 1 hari di-split menjadi beberapa file (part1/part2), agar running trade tidak ada yang hilang.
+    """
     if not os.path.exists(p_month):
-        return None
+        return []
+
     day = int(dt_date.day)
     month = int(dt_date.month)
     year = int(dt_date.year)
 
-    preferred = [
-        f'{day:02d}.csv', f'{day:02d}.xlsx',
-        f'{day}.csv', f'{day}.xlsx',
-        f'{day:02d}-{month:02d}-{year}.csv', f'{day:02d}-{month:02d}-{year}.xlsx',
-        f'{year}-{month:02d}-{day:02d}.csv', f'{year}-{month:02d}-{day:02d}.xlsx',
-    ]
-    for fn in preferred:
-        fp = os.path.join(p_month, fn)
-        if os.path.exists(fp):
-            return fp
-
     files = [f for f in os.listdir(p_month) if f.lower().endswith(('.csv', '.xlsx'))]
     if not files:
-        return None
+        return []
 
-    # kandidat: filename diawali hari (09.csv / 9.csv / 09_xxx.csv)
+    # helper normalisasi nama (tanpa ekstensi)
+    def stem(fn: str) -> str:
+        return os.path.splitext(fn)[0].strip()
+
+    # kandidat utama: diawali hari (09.csv / 9.csv / 09_xxx.csv / 09-xxx.csv)
     day_pat = re.compile(rf'^0?{day}(\D|$)')
-    cand = [f for f in files if day_pat.search(os.path.splitext(f)[0])]
+    cand = [f for f in files if day_pat.search(stem(f))]
 
-    # kandidat: filename mengandung tanggal lengkap
+    # kandidat: mengandung tanggal lengkap (dd mm yyyy) dalam berbagai format
+    dd, mm, yyyy = f'{day:02d}', f'{month:02d}', str(year)
     if not cand:
-        dd, mm, yyyy = f'{day:02d}', f'{month:02d}', str(year)
         cand = [f for f in files if (dd in f and mm in f and yyyy in f)]
 
+    # fallback: kalau tetap kosong, coba yang mengandung dd saja (agak longgar)
     if not cand:
-        return None
+        cand = [f for f in files if dd in f]
 
-    # prefer .csv, lalu urut alfabet (stabil)
+    # urutan: prefer .csv dulu, lalu alfabet (stabil)
     cand_sorted = sorted(cand, key=lambda x: (0 if x.lower().endswith('.csv') else 1, x.lower()))
-    return os.path.join(p_month, cand_sorted[0])
+    return [os.path.join(p_month, fn) for fn in cand_sorted]
+
+def _resolve_daily_file(p_month: str, dt_date) -> str | None:
+    """Backward-compat: ambil file pertama yang match."""
+    files = _resolve_daily_files(p_month, dt_date)
+    return files[0] if files else None
 
 def resolve_database_file(db_root: str, stock: str, dt_date) -> str | None:
     """Resolve path file database berdasarkan (stock, tanggal)."""
@@ -543,72 +547,159 @@ def resolve_database_file(db_root: str, stock: str, dt_date) -> str | None:
     p_month = os.path.join(p_year, month_folder)
     return _resolve_daily_file(p_month, dt_date)
 
+
+def resolve_database_files(db_root: str, stock: str, dt_date) -> list[str]:
+    """Resolve *semua* file database berdasarkan (stock, tanggal)."""
+    p_stock = os.path.join(db_root, stock)
+    year_folder = _resolve_year_folder(p_stock, int(dt_date.year))
+    if not year_folder:
+        return []
+    p_year = os.path.join(p_stock, year_folder)
+    month_folder = _resolve_month_folder(p_year, int(dt_date.month))
+    if not month_folder:
+        return []
+    p_month = os.path.join(p_year, month_folder)
+    return _resolve_daily_files(p_month, dt_date)
+
+def load_database_files(filepaths: list[str]) -> pd.DataFrame:
+    """Load dan gabung banyak file (.csv/.xlsx) jadi 1 DataFrame."""
+    frames = []
+    for fp in filepaths:
+        try:
+            if fp.lower().endswith(".csv"):
+                dfp = pd.read_csv(fp)
+            else:
+                dfp = pd.read_excel(fp)
+            dfp["__source_file"] = os.path.basename(fp)
+            frames.append(dfp)
+        except Exception:
+            continue
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
 # =========================================================
 # 6. DATA PROCESSING (DIPERBAIKI UNTUK MENGHINDARI ERROR FORMAT)
 # =========================================================
-def clean_running_trade(df_input):
+
+def clean_running_trade(df_input: pd.DataFrame, trade_date: datetime.date | None = None):
+    """
+    Bersihin & standarisasi data running trade agar:
+    - tidak ada baris hilang gara-gara parsing time/lot/price
+    - bisa di-sort & di-filter berdasarkan waktu dengan rapi
+    - Value dihitung konsisten: Lot * 100 * Price
+
+    trade_date dipakai untuk membentuk kolom DateTime intraday (default: hari ini).
+    """
+    if df_input is None or df_input.empty:
+        return pd.DataFrame()
+
     df = df_input.copy()
-    df.columns = df.columns.str.strip().str.capitalize()
 
+    # --- 1) Normalisasi nama kolom ---
+    df.columns = [str(c).strip() for c in df.columns]
+    col_lut = {str(c).strip().lower(): str(c).strip() for c in df.columns}
+
+    # mapping fleksibel (lowercase)
     rename_map = {
-        "Time": "Time", "Waktu": "Time", 
-        "Price": "Price", "Harga": "Price",
-        "Lot": "Lot", "Vol": "Lot", "Volume": "Lot",
-        "Buyer": "Buyer", "B": "Buyer", "Broker Beli": "Buyer",
-        "Seller": "Seller", "S": "Seller", "Broker Jual": "Seller",
-        "Action": "Action", "Type": "Action", "Side": "Action"
+        "time": "Time", "waktu": "Time", "jam": "Time", "timestamp": "Time", "datetime": "Time",
+        "price": "Price", "harga": "Price", "last": "Price",
+        "lot": "Lot", "vol": "Lot", "volume": "Lot", "qty": "Lot", "quantity": "Lot", "shares": "Lot",
+        "buyer": "Buyer", "b": "Buyer", "buyer broker": "Buyer", "broker beli": "Buyer", "bcode": "Buyer",
+        "seller": "Seller", "s": "Seller", "seller broker": "Seller", "broker jual": "Seller", "scode": "Seller",
+        "action": "Action", "type": "Action", "side": "Action", "bs": "Action",
+        "buyer_code": "Buyer_Code", "seller_code": "Seller_Code",
     }
-    new_cols = {c: rename_map[c] for c in df.columns if c in rename_map}
-    df.rename(columns=new_cols, inplace=True)
 
+    for low, old in col_lut.items():
+        if low in rename_map:
+            df.rename(columns={old: rename_map[low]}, inplace=True)
+
+    # --- 2) Pastikan kolom minimal ada ---
     required = {"Price", "Lot", "Buyer", "Seller"}
-    if not required.issubset(df.columns):
-        raise ValueError("Kolom Wajib (Price, Lot, Buyer, Seller) tidak lengkap.")
-
-    def clean_code(x):
-        return str(x).upper().split()[0].strip()
-
-    # --- PERBAIKAN UTAMA: Konversi Paksa ke Numerik ---
-    # Ini memperbaiki error 'Unknown format code f'
-    # Kita replace semua karakter non-digit, lalu convert ke int
-    try:
-        df["Price"] = pd.to_numeric(df["Price"].astype(str).str.replace(r'[^\d]', '', regex=True), errors='coerce').fillna(0).astype(int)
-        df["Lot"] = pd.to_numeric(df["Lot"].astype(str).str.replace(r'[^\d]', '', regex=True), errors='coerce').fillna(0).astype(int)
-    except Exception:
-        # Fallback jika regex gagal total (jarang terjadi)
-        df["Price"] = 0
-        df["Lot"] = 0
-
-    # Simpan juga di kolom bantu (opsional, untuk kompatibilitas kode lama)
-    df["Price_Clean"] = df["Price"]
-    df["Lot_Clean"] = df["Lot"]
-    
-    df["Buyer_Code"] = df["Buyer"].apply(clean_code)
-    df["Seller_Code"] = df["Seller"].apply(clean_code)
-    df["Value"] = df["Lot"] * 100 * df["Price"]
-    
-    # Inferensi Action jika tidak ada
-    if "Action" not in df.columns:
-        df["Action"] = "Buy" # Default fallback
-    else:
-        # Standarisasi Action: Buy/Sell
-        df["Action"] = df["Action"].astype(str).apply(lambda x: "Buy" if str(x).upper().startswith("B") else ("Sell" if str(x).upper().startswith("S") else "Buy"))
-
-    # Parsing Time untuk Chart
-    try:
-        today = datetime.date.today()
-        # Coba parsing beberapa format umum
-        df["Time_Obj"] = pd.to_datetime(df["Time"], format="%H:%M:%S", errors='coerce').dt.time
-        
-        # Buat kolom DateTime lengkap untuk Plotly
-        df["DateTime"] = df["Time"].apply(
-            lambda t: datetime.datetime.combine(today, pd.to_datetime(t, format="%H:%M:%S").time()) 
-            if isinstance(t, str) else pd.NaT
+    if not required.issubset(set(df.columns)):
+        raise ValueError(
+            "Kolom wajib tidak lengkap. Minimal harus ada: Price, Lot, Buyer, Seller. "
+            f"Kolom ditemukan: {list(df.columns)}"
         )
-    except:
-        df["DateTime"] = pd.NaT
 
-    return df[df["Value"] > 0]
+    # --- 3) Helper parsing ---
+    def _clean_code(x) -> str:
+        s = str(x).upper().strip()
+        # ambil kode broker 2 huruf pertama yang valid
+        m = re.search(r"\b([A-Z]{2})\b", s)
+        if m:
+            return m.group(1)
+        # fallback: ambil token pertama
+        return s.split()[0] if s else ""
+
+    def _to_int_series(s: pd.Series) -> pd.Series:
+        # buang semua non-digit, lalu to_numeric
+        out = pd.to_numeric(s.astype(str).str.replace(r"[^\d]", "", regex=True), errors="coerce")
+        return out.fillna(0).astype(int)
+
+    def _parse_time_to_dt(val, base_date: datetime.date) -> pd.Timestamp:
+        if pd.isna(val):
+            return pd.NaT
+        if isinstance(val, datetime.datetime):
+            return pd.Timestamp(val)
+        if isinstance(val, datetime.time):
+            return pd.Timestamp(datetime.datetime.combine(base_date, val))
+
+        s = str(val).strip()
+        if not s:
+            return pd.NaT
+
+        # Variasi yang sering muncul:
+        # - "8:58.00"  -> "8:58:00"
+        # - "08:58"    -> "08:58:00"
+        # - "08:58:00.123" -> "08:58:00"
+        s = s.replace(",", ":")
+        if re.match(r"^\d{1,2}:\d{2}\.\d{1,2}$", s):
+            s = s.replace(".", ":", 1)
+        s = re.sub(r"\.\d+$", "", s)  # buang fractional seconds
+        if re.match(r"^\d{1,2}:\d{2}$", s):
+            s = s + ":00"
+
+        t = pd.to_datetime(s, errors="coerce")
+        if pd.isna(t):
+            return pd.NaT
+        return pd.Timestamp(datetime.datetime.combine(base_date, t.time()))
+
+    # --- 4) Clean numerik ---
+    df["Price"] = _to_int_series(df["Price"])
+    df["Lot"] = _to_int_series(df["Lot"])
+
+    # --- 5) Clean broker ---
+    df["Buyer_Code"] = df["Buyer"].apply(_clean_code)
+    df["Seller_Code"] = df["Seller"].apply(_clean_code)
+
+    # --- 6) Action (opsional) ---
+    if "Action" in df.columns:
+        def _norm_action(x):
+            s = str(x).strip().lower()
+            if "buy" in s or s.startswith("b"):
+                return "Buy"
+            if "sell" in s or s.startswith("s"):
+                return "Sell"
+            return "Unknown"
+        df["Action"] = df["Action"].apply(_norm_action)
+    else:
+        df["Action"] = "Unknown"
+
+    # --- 7) Time parsing ---
+    base_date = trade_date or datetime.date.today()
+    df["Time_Str"] = df["Time"].astype(str).str.strip()
+    df["DateTime"] = df["Time"].apply(lambda x: _parse_time_to_dt(x, base_date))
+    df["Time_Obj"] = pd.to_datetime(df["DateTime"], errors="coerce").dt.time
+
+    # --- 8) Value ---
+    df["Value"] = df["Lot"] * 100 * df["Price"]
+
+    # --- 9) Filter baris tidak valid (jangan terlalu agresif) ---
+    df = df[(df["Price"] > 0) & (df["Lot"] > 0)]
+    # kalau time gagal diparse, tetap tampilkan, tapi DateTime = NaT (di-sort belakangan)
+    return df
 
 
 def get_detailed_broker_summary(df):
@@ -668,38 +759,45 @@ def calculate_broker_action_meter(summ):
     return int(ratio * 100)
 
 
-def prepare_trade_book_data(df):
+
+def prepare_trade_book_data(df: pd.DataFrame):
     """
-    Menyiapkan data untuk Trade Book Chart & Table
+    Menyiapkan data untuk Trade Book Chart & Price Table.
+    - Price table: agregasi Buy/Sell per price
+    - Chart: cumulative Buy/Sell per menit (intraday)
+
+    Catatan:
+    Action "Unknown" tidak dimasukkan ke chart kumulatif (biar chart tidak misleading).
     """
-    # 1. Tabel Harga
+    # 1) Price table
     price_grp = df.groupby(["Price", "Action"]).agg(
         Lot=("Lot", "sum"),
         Freq=("Lot", "count")
     ).reset_index()
-    
+
     pivot = price_grp.pivot(index="Price", columns="Action", values=["Lot", "Freq"]).fillna(0)
-    pivot.columns = [f"{c[1]}_{c[0]}" for c in pivot.columns] # e.g. Buy_Lot, Sell_Lot
+    pivot.columns = [f"{c[1]}_{c[0]}" for c in pivot.columns]  # e.g. Buy_Lot, Sell_Lot
     pivot = pivot.reset_index()
-    
-    # Ensure columns exist
+
     for c in ["Buy_Lot", "Sell_Lot", "Buy_Freq", "Sell_Freq"]:
-        if c not in pivot.columns: pivot[c] = 0
-        
+        if c not in pivot.columns:
+            pivot[c] = 0
+
     pivot["Total_Lot"] = pivot["Buy_Lot"] + pivot["Sell_Lot"]
     pivot = pivot.sort_values("Price", ascending=False)
-    
-    # 2. Chart Data (Time Series Cumulative)
+
+    # 2) Chart data
     chart_data = pd.DataFrame()
     if "DateTime" in df.columns:
-        ts = df.set_index("DateTime").sort_index()
-        # Resample 1 min untuk performa
+        ts = df.dropna(subset=["DateTime"]).copy()
+        ts = ts[ts["Action"].isin(["Buy", "Sell"])]
         if not ts.empty:
-            res = ts.groupby([pd.Grouper(freq='1min'), "Action"])["Lot"].sum().unstack(fill_value=0)
+            ts = ts.set_index("DateTime").sort_index()
+            res = ts.groupby([pd.Grouper(freq="1min"), "Action"])["Lot"].sum().unstack(fill_value=0)
             res["Buy_Cum"] = res.get("Buy", 0).cumsum()
             res["Sell_Cum"] = res.get("Sell", 0).cumsum()
             chart_data = res.reset_index()
-            
+
     return pivot, chart_data
 
 
@@ -830,30 +928,285 @@ def render_trade_book(df):
             use_container_width=True, hide_index=True, height=400
         )
 
-def render_running_trade_raw(df):
-    st.subheader("Running Trade Data")
-    
-    col_filter, col_rest = st.columns([1, 4])
-    with col_filter:
-        act_filter = st.selectbox("Filter Action", ["All", "Buy", "Sell"])
-        
-    df_show = df.copy()
-    if act_filter != "All":
-        df_show = df_show[df_show["Action"] == act_filter]
-        
-    cols = ["Time", "Price", "Action", "Lot", "Buyer_Code", "Seller_Code"]
-    
-    st.dataframe(
-        df_show[cols].sort_values("Time", ascending=False).style.format({
-            "Price": "{:,.0f}", "Lot": "{:,.0f}"
-        }).applymap(lambda x: "color:#22c55e" if x=="Buy" else ("color:#ef4444" if x=="Sell" else ""), subset=["Action"])
-          .applymap(style_broker_code, subset=["Buyer_Code", "Seller_Code"]),
-        use_container_width=True, hide_index=True, height=400
+
+
+def compute_foreign_domestic_activity(df: pd.DataFrame):
+    """
+    Hitung aktivitas Foreign vs Domestic.
+    Definisi:
+      - F Buy  : trade dimana Buyer broker group = Asing
+      - F Sell : trade dimana Seller broker group = Asing
+      - D Buy/Sell: selain Asing (BUMN + Lokal)
+    """
+    dfx = df.copy()
+    dfx["Buyer_Group"] = dfx["Buyer_Code"].apply(get_broker_group)
+    dfx["Seller_Group"] = dfx["Seller_Code"].apply(get_broker_group)
+
+    def _sum_where(mask, col):
+        return float(dfx.loc[mask, col].sum()) if col in dfx.columns else 0.0
+
+    def _cnt_where(mask):
+        return int(mask.sum())
+
+    is_f_buy = dfx["Buyer_Group"] == "Asing"
+    is_f_sell = dfx["Seller_Group"] == "Asing"
+    is_d_buy = ~is_f_buy
+    is_d_sell = ~is_f_sell
+
+    out = {
+        "value": {
+            "F_Buy": _sum_where(is_f_buy, "Value"),
+            "F_Sell": _sum_where(is_f_sell, "Value"),
+            "D_Buy": _sum_where(is_d_buy, "Value"),
+            "D_Sell": _sum_where(is_d_sell, "Value"),
+        },
+        "volume": {
+            "F_Buy": _sum_where(is_f_buy, "Lot"),
+            "F_Sell": _sum_where(is_f_sell, "Lot"),
+            "D_Buy": _sum_where(is_d_buy, "Lot"),
+            "D_Sell": _sum_where(is_d_sell, "Lot"),
+        },
+        "freq": {
+            "F_Buy": _cnt_where(is_f_buy),
+            "F_Sell": _cnt_where(is_f_sell),
+            "D_Buy": _cnt_where(is_d_buy),
+            "D_Sell": _cnt_where(is_d_sell),
+        }
+    }
+
+    # persentase Foreign vs Domestic (berdasarkan total dua sisi)
+    for k in ["value", "volume", "freq"]:
+        total_f = out[k]["F_Buy"] + out[k]["F_Sell"]
+        total_d = out[k]["D_Buy"] + out[k]["D_Sell"]
+        grand = total_f + total_d
+        out[k]["Foreign_Pct"] = (total_f / grand * 100) if grand else 0.0
+        out[k]["Domestic_Pct"] = (total_d / grand * 100) if grand else 0.0
+        out[k]["Net_Foreign"] = out[k]["F_Buy"] - out[k]["F_Sell"]
+    return out
+
+
+def render_foreign_domestic_activity(df: pd.DataFrame):
+    st.subheader("Foreign–Domestic Activity")
+
+    stats = compute_foreign_domestic_activity(df)
+
+    tab_val, tab_vol, tab_freq = st.tabs(["Value (IDR)", "Volume (Lot)", "Frequency (x)"])
+
+    def _stacked_bar(metric_key: str, title: str):
+        m = stats[metric_key]
+        bar_df = pd.DataFrame([
+            {"Group": "Foreign", "Side": "Buy", "Value": m["F_Buy"]},
+            {"Group": "Foreign", "Side": "Sell", "Value": m["F_Sell"]},
+            {"Group": "Domestic", "Side": "Buy", "Value": m["D_Buy"]},
+            {"Group": "Domestic", "Side": "Sell", "Value": m["D_Sell"]},
+        ])
+
+        fig = go.Figure()
+        for side, color in [("Buy", "#22c55e"), ("Sell", "#ef4444")]:
+            sub = bar_df[bar_df["Side"] == side]
+            fig.add_trace(go.Bar(
+                x=sub["Group"],
+                y=sub["Value"],
+                name=side,
+                marker_color=color,
+            ))
+        fig.update_layout(
+            barmode="stack",
+            title=title,
+            height=420,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#f9fafb"),
+            legend=dict(orientation="h", y=1.1),
+            margin=dict(l=10, r=10, t=60, b=10),
+        )
+        return fig
+
+    with tab_val:
+        m = stats["value"]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("F Buy", f"Rp {format_number_label(m['F_Buy'])}")
+        c2.metric("F Sell", f"Rp {format_number_label(m['F_Sell'])}")
+        c3.metric("Net Foreign", f"Rp {format_number_label(m['Net_Foreign'])}",
+                  delta="Net Buy" if m["Net_Foreign"] > 0 else ("Net Sell" if m["Net_Foreign"] < 0 else "Flat"))
+        st.plotly_chart(_stacked_bar("value", "Value (IDR)"), use_container_width=True)
+        st.markdown(
+            f"<div style='text-align:center;color:#9ca3af;font-size:12px;'>"
+            f"Foreign <b>{m['Foreign_Pct']:.2f}%</b> | Domestic <b>{m['Domestic_Pct']:.2f}%</b>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    with tab_vol:
+        m = stats["volume"]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("F Buy", f"{m['F_Buy']:,.0f} Lot")
+        c2.metric("F Sell", f"{m['F_Sell']:,.0f} Lot")
+        c3.metric("Net Foreign", f"{m['Net_Foreign']:,.0f} Lot",
+                  delta="Net Buy" if m["Net_Foreign"] > 0 else ("Net Sell" if m["Net_Foreign"] < 0 else "Flat"))
+        st.plotly_chart(_stacked_bar("volume", "Volume (Lot)"), use_container_width=True)
+        st.markdown(
+            f"<div style='text-align:center;color:#9ca3af;font-size:12px;'>"
+            f"Foreign <b>{m['Foreign_Pct']:.2f}%</b> | Domestic <b>{m['Domestic_Pct']:.2f}%</b>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    with tab_freq:
+        m = stats["freq"]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("F Buy", f"{m['F_Buy']:,.0f} x")
+        c2.metric("F Sell", f"{m['F_Sell']:,.0f} x")
+        c3.metric("Net Foreign", f"{m['Net_Foreign']:,.0f} x",
+                  delta="Net Buy" if m["Net_Foreign"] > 0 else ("Net Sell" if m["Net_Foreign"] < 0 else "Flat"))
+        st.plotly_chart(_stacked_bar("freq", "Frequency (x)"), use_container_width=True)
+        st.markdown(
+            f"<div style='text-align:center;color:#9ca3af;font-size:12px;'>"
+            f"Foreign <b>{m['Foreign_Pct']:.2f}%</b> | Domestic <b>{m['Domestic_Pct']:.2f}%</b>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    return stats
+
+
+def render_insight_box(df: pd.DataFrame, summ: pd.DataFrame, fd_stats: dict):
+    """
+    Kesimpulan / insight / saran ringan (bukan rekomendasi investasi).
+    """
+    if df.empty or summ.empty:
+        return
+
+    # VWAP (aproksimasi) & last price (berdasarkan waktu terbaru)
+    total_val = float(df["Value"].sum())
+    total_lot = float(df["Lot"].sum())
+    vwap = (total_val / (total_lot * 100)) if total_lot else 0
+
+    last_price = None
+    if "DateTime" in df.columns and df["DateTime"].notna().any():
+        last_row = df.sort_values("DateTime").dropna(subset=["DateTime"]).iloc[-1]
+        last_price = int(last_row["Price"])
+        last_time = str(last_row.get("Time_Str", ""))
+    else:
+        last_time = ""
+
+    top_acc = summ.sort_values("Net_Val", ascending=False).head(1).iloc[0]
+    top_dist = summ.sort_values("Net_Val", ascending=True).head(1).iloc[0]
+
+    net_foreign_val = fd_stats["value"]["Net_Foreign"]
+    foreign_pct_val = fd_stats["value"]["Foreign_Pct"]
+
+    label = "Net Buy" if net_foreign_val > 0 else ("Net Sell" if net_foreign_val < 0 else "Netral")
+
+    bullets = []
+    bullets.append(f"Broker akumulasi terbesar: <b>{top_acc['Code']}</b> ({get_broker_info(top_acc['Code'])[1]}) "
+                   f"dengan Net <b>Rp {format_number_label(top_acc['Net_Val'])}</b>.")
+    bullets.append(f"Broker distribusi terbesar: <b>{top_dist['Code']}</b> ({get_broker_info(top_dist['Code'])[1]}) "
+                   f"dengan Net <b>Rp {format_number_label(top_dist['Net_Val'])}</b>.")
+    bullets.append(f"Asing (Foreign) dominasi <b>{foreign_pct_val:.2f}%</b> (berdasarkan value 2 sisi) "
+                   f"dengan <b>{label}</b> sebesar <b>Rp {format_number_label(net_foreign_val)}</b>.")
+    bullets.append(f"VWAP intraday (aproksimasi): <b>{vwap:,.0f}</b>.")
+    if last_price is not None:
+        bullets.append(f"Harga transaksi terakhir terbaca: <b>{last_price:,.0f}</b> (time: {last_time}).")
+
+    # Saran ringan berbasis pola (non-advice)
+    tips = []
+    if net_foreign_val > 0:
+        tips.append("Jika tujuan kamu tracking bandar: pantau apakah akumulasi asing berlanjut saat harga mendekati VWAP/area resistance.")
+    elif net_foreign_val < 0:
+        tips.append("Jika asing net sell, hati-hati false break; pantau apakah distribusi terjadi di area high dan volume melemah.")
+    else:
+        tips.append("Net foreign netral; fokus ke broker lokal/BUMN yang dominan dan pola di price table / trade book.")
+
+    tips.append("Cocokkan total lot & total value dengan data sekuritas. Kalau beda jauh, biasanya karena file harian ter-split dan belum tergabung / kolom time gagal diparse.")
+
+    html = "<ul style='margin-top:6px;'>" + "".join([f"<li style='margin-bottom:8px;'>{b}</li>" for b in bullets]) + "</ul>"
+    html2 = "<ul style='margin-top:6px;'>" + "".join([f"<li style='margin-bottom:8px;'>{t}</li>" for t in tips]) + "</ul>"
+
+    st.markdown(
+        f"""
+        <div class="insight-box">
+            <h4 style="margin:0 0 8px 0;">Kesimpulan & Insight</h4>
+            {html}
+            <h4 style="margin:14px 0 8px 0;">Saran (non-financial advice)</h4>
+            {html2}
+            <div style="color:#9ca3af;font-size:11px;margin-top:10px;">
+                *Catatan: insight ini berbasis data running trade yang kamu load, bukan rekomendasi investasi.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-# =========================================================
-# 8. HALAMAN LOGIN (PIN TANPA SIDEBAR)
-# =========================================================
+
+def render_running_trade_raw(df: pd.DataFrame):
+    st.subheader("Running Trade")
+
+    # ===== Filters =====
+    c1, c2, c3, c4 = st.columns([1.2, 1.4, 2.2, 1.2])
+
+    with c1:
+        act_filter = st.selectbox("Action", ["All", "Buy", "Sell", "Unknown"], index=0)
+
+    with c2:
+        sort_order = st.selectbox("Urutan", ["Terbaru dulu", "Terlama dulu"], index=0)
+
+    # Range waktu (pakai Time_Obj)
+    min_t = None
+    max_t = None
+    if "Time_Obj" in df.columns and df["Time_Obj"].notna().any():
+        min_t = df["Time_Obj"].dropna().min()
+        max_t = df["Time_Obj"].dropna().max()
+
+    with c3:
+        if min_t and max_t:
+            t_from, t_to = st.slider(
+                "Filter waktu",
+                min_value=min_t,
+                max_value=max_t,
+                value=(min_t, max_t),
+                format="HH:mm:ss",
+            )
+        else:
+            t_from, t_to = None, None
+            st.caption("Filter waktu tidak aktif (kolom Time tidak terbaca)")
+
+    with c4:
+        max_rows = st.number_input("Max rows", min_value=50, max_value=5000, value=500, step=50)
+
+    df_show = df.copy()
+
+    if act_filter != "All":
+        df_show = df_show[df_show["Action"] == act_filter]
+
+    if t_from and t_to and "Time_Obj" in df_show.columns:
+        df_show = df_show[df_show["Time_Obj"].between(t_from, t_to)]
+
+    asc = True if sort_order == "Terlama dulu" else False
+    # sort utama pakai DateTime, fallback Time_Str
+    if "DateTime" in df_show.columns and df_show["DateTime"].notna().any():
+        df_show = df_show.sort_values("DateTime", ascending=asc, na_position="last")
+    else:
+        df_show = df_show.sort_values("Time_Str", ascending=asc)
+
+    st.caption(f"Menampilkan {min(len(df_show), int(max_rows)):,} dari {len(df_show):,} transaksi")
+
+    cols = ["Time_Str", "Price", "Action", "Lot", "Buyer_Code", "Seller_Code"]
+    cols = [c for c in cols if c in df_show.columns]
+
+    st.dataframe(
+        df_show[cols].head(int(max_rows)).style.format({
+            "Price": "{:,.0f}",
+            "Lot": "{:,.0f}",
+        })
+        .applymap(lambda x: "color:#22c55e" if x == "Buy" else ("color:#ef4444" if x == "Sell" else ""), subset=["Action"] if "Action" in cols else None)
+        .applymap(style_broker_code, subset=[c for c in ["Buyer_Code", "Seller_Code"] if c in cols]),
+        use_container_width=True,
+        hide_index=True,
+        height=520,
+    )
+
+
 def login_page():
     inject_custom_css()
     hide_sidebar()
@@ -965,20 +1318,19 @@ def bandarmology_page():
 
                     load_btn = st.button("Load Data", use_container_width=True)
                     if load_btn:
-                        fp = resolve_database_file(DB_ROOT, sel_stock, sel_date)
-                        if not fp:
+                        fps = resolve_database_files(DB_ROOT, sel_stock, sel_date)
+                        if not fps:
                             st.warning("Data tidak tersedia untuk tanggal tersebut.")
                         else:
                             try:
-                                if fp.lower().endswith("csv"):
-                                    df_raw = pd.read_csv(fp)
+                                df_raw = load_database_files(fps)
+                                if df_raw.empty:
+                                    st.error("File ditemukan, tapi gagal dibaca. Cek format CSV/XLSX.")
                                 else:
-                                    df_raw = pd.read_excel(fp)
-
-                                current_stock = sel_stock
-                                st.session_state["df_raw"] = df_raw
-                                st.session_state["current_stock"] = current_stock
-                                st.toast(f"Data {sel_stock} berhasil dimuat.", icon="✅")
+                                    current_stock = sel_stock
+                                    st.session_state["df_raw"] = df_raw
+                                    st.session_state["current_stock"] = current_stock
+                                    st.toast(f"Data {sel_stock} dimuat ({len(fps)} file).", icon="✅")
                             except Exception:
                                 st.error("Gagal load data, cek file-nya.")
             else:
@@ -1026,7 +1378,7 @@ def bandarmology_page():
 
     try:
         # Data Cleaning & Processing
-        df = clean_running_trade(df_raw)
+        df = clean_running_trade(df_raw, trade_date=st.session_state.get('selected_date'))
         summ = get_detailed_broker_summary(df)
 
         st.title(f"📊 Bandarmology {current_stock}")
@@ -1042,8 +1394,14 @@ def bandarmology_page():
         col4.metric("Net Foreign", f"Rp {format_number_label(foreign_net)}", delta_color="normal" if foreign_net==0 else ("inverse" if foreign_net < 0 else "normal"))
 
         st.markdown("---")
-        
-        # Broker Action Meter (New Feature)
+
+        # Foreign–Domestic Activity (mirip sekuritas)
+        fd_stats = render_foreign_domestic_activity(df)
+
+        # Kesimpulan / Insight
+        render_insight_box(df, summ, fd_stats)
+
+        # Broker Action Meter
         render_broker_action_meter(summ)
         st.write("")
 
