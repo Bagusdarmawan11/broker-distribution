@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import re
 import os
+import datetime
 import requests
 import streamlit.components.v1 as components
 
@@ -402,6 +403,106 @@ def get_stock_ticker():
         return "<div class='ticker-wrap'>Connection Limited</div>"
 
 # =========================================================
+# 5B. DATABASE DATE RESOLVER (Tanggal -> Path File)
+# =========================================================
+MONTH_ID = {
+    1: 'Januari', 2: 'Februari', 3: 'Maret', 4: 'April', 5: 'Mei', 6: 'Juni',
+    7: 'Juli', 8: 'Agustus', 9: 'September', 10: 'Oktober', 11: 'November', 12: 'Desember',
+}
+
+def _norm_token(s: str) -> str:
+    return re.sub(r'[^a-z0-9]+', '', str(s).lower())
+
+def _resolve_year_folder(p_stock: str, year: int) -> str | None:
+    if not os.path.exists(p_stock):
+        return None
+    target = str(year)
+    p = os.path.join(p_stock, target)
+    if os.path.isdir(p):
+        return target
+    # fallback: cari folder yg cocok (case-insensitive / ada tambahan)
+    for d in os.listdir(p_stock):
+        if os.path.isdir(os.path.join(p_stock, d)) and _norm_token(d) == _norm_token(target):
+            return d
+    return None
+
+def _resolve_month_folder(p_year: str, month: int) -> str | None:
+    if not os.path.exists(p_year):
+        return None
+    id_name = MONTH_ID.get(month, str(month))
+    # kandidat umum
+    candidates = [
+        id_name, id_name.lower(), id_name.upper(),
+        id_name[:3], id_name[:3].lower(),
+        str(month), f'{month:02d}',
+        f'{month}-{id_name}', f'{month:02d}-{id_name}',
+        f'{id_name}-{month}', f'{id_name}-{month:02d}',
+    ]
+    dirs = [d for d in os.listdir(p_year) if os.path.isdir(os.path.join(p_year, d))]
+    norm_map = { _norm_token(d): d for d in dirs }
+    for c in candidates:
+        nc = _norm_token(c)
+        if nc in norm_map:
+            return norm_map[nc]
+    # fallback: coba match mengandung nama bulan / angka bulan
+    for d in dirs:
+        nd = _norm_token(d)
+        if _norm_token(id_name) in nd or _norm_token(f'{month:02d}') in nd:
+            return d
+    return None
+
+def _resolve_daily_file(p_month: str, dt_date) -> str | None:
+    if not os.path.exists(p_month):
+        return None
+    day = int(dt_date.day)
+    month = int(dt_date.month)
+    year = int(dt_date.year)
+
+    preferred = [
+        f'{day:02d}.csv', f'{day:02d}.xlsx',
+        f'{day}.csv', f'{day}.xlsx',
+        f'{day:02d}-{month:02d}-{year}.csv', f'{day:02d}-{month:02d}-{year}.xlsx',
+        f'{year}-{month:02d}-{day:02d}.csv', f'{year}-{month:02d}-{day:02d}.xlsx',
+    ]
+    for fn in preferred:
+        fp = os.path.join(p_month, fn)
+        if os.path.exists(fp):
+            return fp
+
+    files = [f for f in os.listdir(p_month) if f.lower().endswith(('.csv', '.xlsx'))]
+    if not files:
+        return None
+
+    # kandidat: filename diawali hari (09.csv / 9.csv / 09_xxx.csv)
+    day_pat = re.compile(rf'^0?{day}(\D|$)')
+    cand = [f for f in files if day_pat.search(os.path.splitext(f)[0])]
+
+    # kandidat: filename mengandung tanggal lengkap
+    if not cand:
+        dd, mm, yyyy = f'{day:02d}', f'{month:02d}', str(year)
+        cand = [f for f in files if (dd in f and mm in f and yyyy in f)]
+
+    if not cand:
+        return None
+
+    # prefer .csv, lalu urut alfabet (stabil)
+    cand_sorted = sorted(cand, key=lambda x: (0 if x.lower().endswith('.csv') else 1, x.lower()))
+    return os.path.join(p_month, cand_sorted[0])
+
+def resolve_database_file(db_root: str, stock: str, dt_date) -> str | None:
+    """Resolve path file database berdasarkan (stock, tanggal)."""
+    p_stock = os.path.join(db_root, stock)
+    year_folder = _resolve_year_folder(p_stock, int(dt_date.year))
+    if not year_folder:
+        return None
+    p_year = os.path.join(p_stock, year_folder)
+    month_folder = _resolve_month_folder(p_year, int(dt_date.month))
+    if not month_folder:
+        return None
+    p_month = os.path.join(p_year, month_folder)
+    return _resolve_daily_file(p_month, dt_date)
+
+# =========================================================
 # 6. DATA PROCESSING
 # =========================================================
 def clean_running_trade(df_input):
@@ -642,138 +743,61 @@ def bandarmology_page():
 
         if source_type == "Database Folder":
             if os.path.exists(DB_ROOT):
-                # level 1: daftar saham (folder)
-                stocks = sorted(
-                    [
-                        d
-                        for d in os.listdir(DB_ROOT)
-                        if os.path.isdir(os.path.join(DB_ROOT, d))
-                    ]
-                )
-                sel_stock = (
-                    st.selectbox("Saham", stocks, key="stock_sel") if stocks else None
-                )
+                stocks = sorted([
+                    d for d in os.listdir(DB_ROOT) if os.path.isdir(os.path.join(DB_ROOT, d))
+                ])
+                sel_stock = st.selectbox("Saham", stocks) if stocks else None
 
-                if not stocks:
-                    st.info(
-                        "Folder database kosong. Gunakan 'Upload Manual' "
-                        "atau isi struktur foldernya."
-                    )
+                if not sel_stock:
+                    st.info("Tidak ada folder saham di database.")
+                else:
+                    # Date picker (1 field) -> otomatis resolve Tahun/Bulan/File
+                    default_date = st.session_state.get("selected_date")
+                    if default_date is None:
+                        default_date = datetime.date.today()
 
-                if sel_stock:
-                    p_stock = os.path.join(DB_ROOT, sel_stock)
-
-                    # ==== NEW: SATU FIELD TANGGAL ====
-                    # Kumpulkan semua kombinasi Tahun/Bulan/File untuk saham ini
-                    month_order = {
-                        "Januari": 1,
-                        "Februari": 2,
-                        "Maret": 3,
-                        "April": 4,
-                        "Mei": 5,
-                        "Juni": 6,
-                        "Juli": 7,
-                        "Agustus": 8,
-                        "September": 9,
-                        "Oktober": 10,
-                        "November": 11,
-                        "Desember": 12,
-                    }
-
-                    date_entries = []
-
-                    for year in os.listdir(p_stock):
-                        p_year = os.path.join(p_stock, year)
-                        if not os.path.isdir(p_year):
-                            continue
-
-                        # parse tahun
-                        try:
-                            year_int = int(year)
-                        except ValueError:
-                            year_int = 0
-
-                        for month in os.listdir(p_year):
-                            p_month = os.path.join(p_year, month)
-                            if not os.path.isdir(p_month):
-                                continue
-
-                            # urutan bulan
-                            if month.isdigit():
-                                month_idx = int(month)
-                            else:
-                                month_idx = month_order.get(month, 99)
-
-                            for fname in os.listdir(p_month):
-                                if not fname.lower().endswith((".csv", ".xlsx")):
-                                    continue
-
-                                day_str = os.path.splitext(fname)[0]
-                                if day_str.isdigit():
-                                    day_int = int(day_str)
-                                    day_label = day_str.zfill(2)
-                                else:
-                                    day_int = 0
-                                    day_label = day_str
-
-                                label = f"{day_label} {month} {year}"
-                                full_path = os.path.join(p_month, fname)
-
-                                date_entries.append(
-                                    {
-                                        "label": label,
-                                        "path": full_path,
-                                        "year": year_int,
-                                        "month_idx": month_idx,
-                                        "day": day_int,
-                                    }
-                                )
-
-                    if date_entries:
-                        # sort kronologis
-                        date_entries = sorted(
-                            date_entries,
-                            key=lambda x: (x["year"], x["month_idx"], x["day"]),
-                        )
-
-                        labels = [e["label"] for e in date_entries]
-
-                        # default ke tanggal terakhir (paling baru)
-                        default_index = len(labels) - 1
-
-                        sel_label = st.selectbox(
+                    try:
+                        sel_date = st.date_input(
                             "Tanggal",
-                            labels,
-                            index=default_index,
-                            key="tanggal_combined",
+                            value=default_date,
+                            format="DD MMM YYYY",
+                            key="db_date",
                         )
+                    except TypeError:
+                        # untuk Streamlit versi lama yang belum support argumen format
+                        sel_date = st.date_input("Tanggal", value=default_date, key="db_date")
 
-                        load_btn = st.button(
-                            "Load Data",
-                            use_container_width=True,
-                            key="load_btn",
-                        )
+                    st.session_state["selected_date"] = sel_date
 
-                        if sel_label and load_btn:
-                            selected_entry = next(
-                                e for e in date_entries if e["label"] == sel_label
-                            )
-                            fp = selected_entry["path"]
+                    load_btn = st.button("Load Data", use_container_width=True)
+                    if load_btn:
+                        fp = resolve_database_file(DB_ROOT, sel_stock, sel_date)
+                        if not fp:
+                            st.warning("Data tidak tersedia untuk tanggal tersebut.")
                             try:
-                                if fp.endswith(".csv"):
+                                st.toast("Data tidak tersedia untuk tanggal tersebut.", icon="⚠️")
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                if fp.lower().endswith("csv"):
                                     df_raw = pd.read_csv(fp)
                                 else:
                                     df_raw = pd.read_excel(fp)
+
                                 current_stock = sel_stock
                                 st.session_state["df_raw"] = df_raw
                                 st.session_state["current_stock"] = current_stock
+
+                                try:
+                                    st.toast(
+                                        f"Data {sel_stock} ({sel_date.strftime('%d %b %Y')}) berhasil dimuat.",
+                                        icon="✅",
+                                    )
+                                except Exception:
+                                    pass
                             except Exception:
                                 st.error("Gagal load data, cek file-nya.")
-                    else:
-                        st.info(
-                            "Belum ada file CSV/XLSX untuk saham ini di struktur "
-                            "folder tahun/bulan."
-                        )
             else:
                 st.warning(f"Folder database '{DB_ROOT}' belum dibuat.")
         else:
@@ -1020,7 +1044,7 @@ def daftar_saham_page():
     except Exception as e:
         st.error(f"Gagal memuat file daftar saham: {e}")
         st.info(
-            "Letakkan file **'Daftar Saham.xlsx'** di folder yang sama dengan script Streamlit ini."
+            "Letakkan file **'Daftar Saham  - 20251211.xlsx'** di folder yang sama dengan script Streamlit ini."
         )
         return
 
