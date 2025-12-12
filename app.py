@@ -256,6 +256,18 @@ def inject_custom_css():
             border-radius: 12px;
             overflow: hidden;
         }}
+        
+        /* ============ DATE INPUT ============ */
+        /* Mengatur agar date picker terlihat rapi di dark mode */
+        div[data-baseweb="input"] {{
+            background-color: {input_bg} !important;
+            border-color: {input_border} !important;
+            color: {text_color} !important;
+            border-radius: 8px;
+        }}
+        div[data-baseweb="calendar"] {{
+            background-color: {card_bg} !important;
+        }}
 
         /* ============ TICKER & TAG ============ */
         .tag {{
@@ -757,14 +769,15 @@ def bandarmology_page():
                         default_date = datetime.date.today()
 
                     try:
+                        # PERBAIKAN: Format date_input hanya mendukung numerik (DD/MM/YYYY)
                         sel_date = st.date_input(
                             "Tanggal",
                             value=default_date,
-                            format="DD MMM YYYY",
+                            format="DD/MM/YYYY",  # Format yang aman dan standar
                             key="db_date",
                         )
                     except TypeError:
-                        # untuk Streamlit versi lama yang belum support argumen format
+                        # Fallback untuk versi Streamlit lama
                         sel_date = st.date_input("Tanggal", value=default_date, key="db_date")
 
                     st.session_state["selected_date"] = sel_date
@@ -1044,7 +1057,7 @@ def daftar_saham_page():
     except Exception as e:
         st.error(f"Gagal memuat file daftar saham: {e}")
         st.info(
-            "Letakkan file **'Daftar Saham  - 20251211.xlsx'** di folder yang sama dengan script Streamlit ini."
+            "Letakkan file **'Daftar Saham.xlsx'** di folder yang sama dengan script Streamlit ini."
         )
         return
 
