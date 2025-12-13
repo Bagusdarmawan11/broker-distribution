@@ -495,7 +495,14 @@ def _resolve_month_folder(p_year: str, month: int) -> str | None:
 
 def _resolve_daily_files(p_month: str, dt_date) -> list[str]:
     """Cari *semua* file harian yang match (bukan hanya 1 file).
-    Ini penting kalau data 1 hari di-split menjadi beberapa file (part1/part2), agar running trade tidak ada yang hilang.
+
+    Perbaikan penting:
+    - Hindari fallback 'dd in filename' yang terlalu longgar (bisa kebaca SEMUA file dalam 1 bulan, terutama kalau dd==mm seperti 12/12).
+    - Match hanya jika:
+        (1) nama file (tanpa ekstensi) diawali day (09.csv / 9_part1.csv / 09-xxx.csv), atau
+        (2) nama file mengandung tanggal lengkap (YYYY-MM-DD / DD-MM-YYYY / YYYYMMDD / DDMMYYYY) dengan separator apa pun.
+
+    Ini mencegah nilai transaksi membengkak (mis. jadi triliunan) karena salah load banyak hari sekaligus.
     """
     if not os.path.exists(p_month):
         return []
@@ -508,22 +515,41 @@ def _resolve_daily_files(p_month: str, dt_date) -> list[str]:
     if not files:
         return []
 
-    # helper normalisasi nama (tanpa ekstensi)
-    def stem(fn: str) -> str:
-        return os.path.splitext(fn)[0].strip()
+    dd, mm, yyyy = f"{day:02d}", f"{month:02d}", str(year)
 
-    # kandidat utama: diawali hari (09.csv / 9.csv / 09_xxx.csv / 09-xxx.csv)
-    day_pat = re.compile(rf'^0?{day}(\D|$)')
-    cand = [f for f in files if day_pat.search(stem(f))]
+    def stem_lower(fn: str) -> str:
+        return os.path.splitext(fn)[0].strip().lower()
 
-    # kandidat: mengandung tanggal lengkap (dd mm yyyy) dalam berbagai format
-    dd, mm, yyyy = f'{day:02d}', f'{month:02d}', str(year)
+    # (1) kandidat utama: diawali hari
+    start_day = re.compile(rf"^0?{day}([^0-9]|$)")
+    cand = [f for f in files if start_day.search(stem_lower(f))]
+
+    # (2) kandidat tanggal lengkap (lebih aman)
     if not cand:
-        cand = [f for f in files if (dd in f and mm in f and yyyy in f)]
+        s_ddmm = f"{dd}{mm}"
+        s_mmdd = f"{mm}{dd}"
+        s_yyyymmdd = f"{yyyy}{mm}{dd}"
+        s_ddmmyyyy = f"{dd}{mm}{yyyy}"
 
-    # fallback: kalau tetap kosong, coba yang mengandung dd saja (agak longgar)
-    if not cand:
-        cand = [f for f in files if dd in f]
+        # allow separators: -, _, ., space
+        sep = r"[-_\.\s]"
+        full_patterns = [
+            re.compile(rf"{yyyy}{sep}{mm}{sep}{dd}"),
+            re.compile(rf"{dd}{sep}{mm}{sep}{yyyy}"),
+            re.compile(rf"{yyyy}{sep}{dd}{sep}{mm}"),  # jarang, tapi biarin
+            re.compile(rf"{dd}{sep}{yyyy}{sep}{mm}"),  # jarang, tapi biarin
+            re.compile(rf"{s_yyyymmdd}"),
+            re.compile(rf"{s_ddmmyyyy}"),
+        ]
+
+        for f in files:
+            s = f.lower()
+            if any(p.search(s) for p in full_patterns):
+                cand.append(f)
+
+    # de-dup (tetap jaga urutan)
+    seen = set()
+    cand = [x for x in cand if not (x.lower() in seen or seen.add(x.lower()))]
 
     # urutan: prefer .csv dulu, lalu alfabet (stabil)
     cand_sorted = sorted(cand, key=lambda x: (0 if x.lower().endswith('.csv') else 1, x.lower()))
@@ -582,12 +608,12 @@ def load_database_files(filepaths: list[str]) -> pd.DataFrame:
 # 6. DATA PROCESSING (DIPERBAIKI UNTUK MENGHINDARI ERROR FORMAT)
 # =========================================================
 
-def clean_running_trade(df_input: pd.DataFrame, trade_date: datetime.date | None = None):
+def clean_running_trade(df_input: pd.DataFrame, trade_date: datetime.date | None = None, volume_mode: str = "AUTO"):
     """
     Bersihin & standarisasi data running trade agar:
     - tidak ada baris hilang gara-gara parsing time/lot/price
     - bisa di-sort & di-filter berdasarkan waktu dengan rapi
-    - Value dihitung konsisten: Lot * 100 * Price
+    - Value dihitung konsisten: Shares * Price (Shares diturunkan dari Lot atau sebaliknya)
 
     trade_date dipakai untuk membentuk kolom DateTime intraday (default: hari ini).
     """
@@ -669,6 +695,33 @@ def clean_running_trade(df_input: pd.DataFrame, trade_date: datetime.date | None
     # --- 4) Clean numerik ---
     df["Price"] = _to_int_series(df["Price"])
     df["Lot"] = _to_int_series(df["Lot"])
+    # --- 7b) Satuan Volume (Lot vs Shares) ---
+    # Banyak data sekuritas menampilkan volume dalam "Shares (lembar)", sementara file lain sudah dalam "Lot".
+    # Kalau salah asumsi, nilai transaksi bisa melonjak (mis. jadi triliunan) atau mengecil.
+    mode = (volume_mode or "AUTO").strip().upper()
+    if mode.startswith("LOT"):
+        mode = "LOT"
+    elif mode.startswith("SHARE"):
+        mode = "SHARES"
+    elif mode.startswith("AUTO"):
+        mode = "AUTO"
+    if mode == "AUTO":
+        s = df["Lot"].dropna()
+        if len(s) == 0:
+            mode = "LOT"
+        else:
+            # Heuristik: kalau mayoritas kelipatan 100 dan median cukup besar, kemungkinan ini Shares.
+            div100 = ((s.astype("int64") % 100) == 0).mean()
+            med = float(s.median())
+            mode = "SHARES" if (div100 > 0.90 and med >= 100) else "LOT"
+
+    if mode == "SHARES":
+        df["Shares"] = df["Lot"].astype("int64")
+        df["Lot"] = (df["Shares"] // 100).astype("int64")
+    else:
+        df["Lot"] = df["Lot"].astype("int64")
+        df["Shares"] = (df["Lot"] * 100).astype("int64")
+
 
     # --- 5) Clean broker ---
     df["Buyer_Code"] = df["Buyer"].apply(_clean_code)
@@ -694,7 +747,7 @@ def clean_running_trade(df_input: pd.DataFrame, trade_date: datetime.date | None
     df["Time_Obj"] = pd.to_datetime(df["DateTime"], errors="coerce").dt.time
 
     # --- 8) Value ---
-    df["Value"] = df["Lot"] * 100 * df["Price"]
+    df["Value"] = df["Shares"] * df["Price"]
 
     # --- 9) Filter baris tidak valid (jangan terlalu agresif) ---
     df = df[(df["Price"] > 0) & (df["Lot"] > 0)]
@@ -1330,6 +1383,13 @@ def bandarmology_page():
                                     current_stock = sel_stock
                                     st.session_state["df_raw"] = df_raw
                                     st.session_state["current_stock"] = current_stock
+                                    # Debug / transparansi: file apa saja yang kebaca
+                                    with st.expander("Detail file yang ter-load", expanded=False):
+                                        st.write("Jumlah file:", len(fps))
+                                        st.write("Daftar file:")
+                                        for p in fps:
+                                            st.code(p)
+                                        st.write("Jumlah baris (raw):", len(df_raw))
                                     st.toast(f"Data {sel_stock} dimuat ({len(fps)} file).", icon="✅")
                             except Exception:
                                 st.error("Gagal load data, cek file-nya.")
@@ -1352,6 +1412,16 @@ def bandarmology_page():
                     st.session_state["current_stock"] = current_stock
                 except Exception:
                     st.error("File tidak dapat dibaca, cek formatnya.")
+
+
+        st.markdown("### ⚙️ Pengaturan Nilai")
+        volume_mode_ui = st.selectbox(
+            "Satuan Volume di file",
+            ["Auto", "Lot (1 lot = 100 saham)", "Shares (lembar saham)"],
+            index=0,
+            key="volume_mode",
+        )
+        st.caption("Kalau nilai transaksi jadi terlalu besar/kecil, ubah opsi ini lalu refresh analisis.")
 
     # --------- MAIN CONTENT ---------
     if df_raw is None:
@@ -1378,7 +1448,7 @@ def bandarmology_page():
 
     try:
         # Data Cleaning & Processing
-        df = clean_running_trade(df_raw, trade_date=st.session_state.get('selected_date'))
+        df = clean_running_trade(df_raw, trade_date=st.session_state.get('selected_date'), volume_mode=st.session_state.get("volume_mode","Auto"))
         summ = get_detailed_broker_summary(df)
 
         st.title(f"📊 Bandarmology {current_stock}")
