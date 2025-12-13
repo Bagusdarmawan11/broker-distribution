@@ -8,6 +8,7 @@ import datetime
 import requests
 import time
 import streamlit.components.v1 as components
+from pathlib import Path
 
 # =========================================================
 # 1. KONFIGURASI HALAMAN (dark mode only)
@@ -429,6 +430,215 @@ def format_freq_label(value):
     if abs_val >= 1e3:
         return f"{value/1e3:.2f}K"
     return f"{value:,.0f}"
+
+
+# =========================================================
+# 5A. INSIGHT ENGINE (Gaya Bandar) - NEW
+# =========================================================
+def _fmt_id(x) -> str:
+    """Format angka Indonesia untuk tampilan ringkas."""
+    try:
+        return f"{int(round(float(x))):,}".replace(",", ".")
+    except Exception:
+        return str(x)
+
+def _badge(label: str, color: str = "#22c55e") -> str:
+    return f"<span style='display:inline-block;padding:3px 10px;border-radius:999px;background:{color};color:#0b1020;font-weight:800;font-size:11px;'>{label}</span>"
+
+def render_bandarmology_insight(title: str, bullets: list[str], conclusion: str | None = None, tone: str = "good"):
+    """Kotak insight konsisten untuk setiap visual."""
+    if not bullets and not conclusion:
+        return
+    border = "#22c55e" if tone == "good" else ("#ef4444" if tone == "bad" else "#60a5fa")
+    header_badge = _badge("GAYA BANDAR", "#f97316")
+    html = "<ul style='margin:10px 0 0 18px;'>" + "".join([f"<li style='margin:0 0 6px 0;color:#e5e7eb;'>{b}</li>" for b in bullets]) + "</ul>"
+    concl = f"<div style='margin-top:10px;color:#f9fafb;font-weight:800;'>Kesimpulan: {conclusion}</div>" if conclusion else ""
+    st.markdown(
+        f"""
+        <div class="insight-box" style="border-left:4px solid {border};">
+            <div style="display:flex;gap:10px;align-items:center;justify-content:space-between;">
+                <div style="font-weight:900;color:#f9fafb;">{title}</div>
+                <div>{header_badge}</div>
+            </div>
+            {html}
+            {concl}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+def make_fd_insight(fd_stats: dict, mode_key: str = "value") -> tuple[list[str], str, str]:
+    m = fd_stats.get(mode_key, {}) if fd_stats else {}
+    net = float(m.get("Net_Foreign", 0))
+    fp = float(m.get("Foreign_Pct", 0))
+    label = "Asing Akumulasi" if net > 0 else ("Asing Distribusi" if net < 0 else "Asing Netral")
+    tone = "good" if net > 0 else ("bad" if net < 0 else "neutral")
+
+    bullets = [
+        f"Dominasi asing (2 sisi): <b>{fp:.2f}%</b> | domestik: <b>{float(m.get('Domestic_Pct',0)):.2f}%</b>.",
+        f"Net asing: <b>{format_number_label(net) if mode_key=='value' else _fmt_id(net)}</b> ({label}).",
+        "Kalau asing net buy saat harga tidak liar (naik bertahap), biasanya itu ciri akumulasi yang rapi.",
+        "Kalau asing net sell saat harga naik (ritel FOMO), seringnya itu distribusi."
+    ]
+    conclusion = f"{label} → fokus validasi dengan struktur harga (HH/HL) + volume."
+    return bullets, conclusion, tone
+
+def make_broker_summary_insight(summ: pd.DataFrame, net_mode: bool = True) -> tuple[list[str], str, str]:
+    if summ is None or summ.empty:
+        return [], "Data broker summary kosong.", "neutral"
+    # Top net buy/sell
+    top_acc = summ.sort_values("Net_Val", ascending=False).head(3)
+    top_dist = summ.sort_values("Net_Val", ascending=True).head(3)
+    acc_txt = ", ".join([f"<b>{r['Code']}</b> (Net Rp {format_number_label(r['Net_Val'])})" for _, r in top_acc.iterrows()])
+    dist_txt = ", ".join([f"<b>{r['Code']}</b> (Net Rp {format_number_label(r['Net_Val'])})" for _, r in top_dist.iterrows()])
+
+    # Konsentrasi top 5
+    top5 = summ.reindex(summ["Net_Val"].abs().sort_values(ascending=False).index).head(5)
+    conc = (top5["Net_Val"].abs().sum() / summ["Net_Val"].abs().sum() * 100) if summ["Net_Val"].abs().sum() else 0
+
+    bullets = [
+        f"Top akumulasi (net buy): {acc_txt}.",
+        f"Top distribusi (net sell): {dist_txt}.",
+        f"Konsentrasi 5 broker paling dominan: <b>{conc:.1f}%</b> (semakin tinggi = pergerakan lebih 'dikunci' tangan besar).",
+        "Baca cepat: net buy besar + muncul berulang beberapa hari = kandidat bandar akumulasi.",
+    ]
+    net_total = float(summ["Net_Val"].sum())
+    tone = "good" if net_total > 0 else ("bad" if net_total < 0 else "neutral")
+    conclusion = "Akumulasi lebih kuat" if net_total > 0 else ("Distribusi lebih kuat" if net_total < 0 else "Kekuatan seimbang")
+    return bullets, conclusion, tone
+
+def make_consistency_insight(cons: pd.DataFrame) -> tuple[list[str], str, str]:
+    if cons is None or cons.empty:
+        return [], "Belum cukup data multi-day.", "neutral"
+    # Score: Net_Val + Consistency_Score
+    work = cons.copy()
+    # Top akumulasi konsisten
+    topA = work[work["Net_Lot"] > 0].head(5)
+    topD = work[work["Net_Lot"] < 0].sort_values("Net_Lot").head(5)
+
+    def _fmt_row(r):
+        return f"<b>{r['Code']}</b> (days {int(r['Days_Active'])}, net lot {_fmt_id(r['Net_Lot'])}, score {int(r['Consistency_Score'])})"
+
+    bullets = [
+        "<b>Cara baca tabel:</b> cari kombinasi <b>Days_Active tinggi</b> + <b>Net_Lot besar</b> + <b>Consistency_Score tinggi</b> → broker kerja multi-hari (akumulasi).",
+        "Days_Active = seberapa sering broker aktif di periode; Consistency_Score mendekati 100 = lebih sering net buy, mendekati 0 = lebih sering net sell.",
+        "Top akumulasi konsisten: " + (", ".join([_fmt_row(r) for _, r in topA.iterrows()]) if not topA.empty else "—"),
+        "Top distribusi konsisten: " + (", ".join([_fmt_row(r) for _, r in topD.iterrows()]) if not topD.empty else "—"),
+    ]
+    tone = "good" if not topA.empty and (topA["Net_Lot"].sum() > abs(topD["Net_Lot"].sum()) if not topD.empty else True) else "neutral"
+    conclusion = "Ada indikasi akumulasi multi-hari" if tone == "good" else "Belum ada dominasi akumulasi multi-hari yang jelas"
+    return bullets, conclusion, tone
+
+# Mapping label Big Print (English -> Indonesia)
+BIG_PRINT_LABEL_ID = {
+    "Absorption (Buy, price flat)": "Serap (Beli, harga ditahan)",
+    "Impulse Up (Buy)": "Dorong Naik (Beli)",
+    "Failed Buy / Supply": "Beli Gagal / Ada Supply",
+    "Big Buy": "Big Buy (Beli besar)",
+    "Absorption (Sell absorbed)": "Serap (Jual diserap)",
+    "Distribution (Sell)": "Distribusi (Jual besar)",
+    "Squeeze / Trap Sell": "Squeeze / Trap Sell",
+    "Big Sell": "Big Sell (Jual besar)",
+    "Big Print": "Big Print",
+}
+
+def make_bigprint_insight(bp: pd.DataFrame) -> tuple[list[str], str, str]:
+    if bp is None or bp.empty:
+        return ["Turunkan percentile atau kurangi minimal lot agar Big Print muncul."], "Tidak ada big print terdeteksi.", "neutral"
+    total_lot = float(bp["Lot"].sum()) if "Lot" in bp.columns else 0
+    thr = int(bp["Threshold_Lot"].iloc[0]) if "Threshold_Lot" in bp.columns and len(bp) else 0
+    counts = bp["Label"].value_counts() if "Label" in bp.columns else pd.Series(dtype=int)
+
+    # dominasi serap vs distribusi
+    serap = counts[counts.index.astype(str).str.lower().str.contains("serap")].sum() if not counts.empty else 0
+    dist = counts[counts.index.astype(str).str.lower().str.contains("distribusi")].sum() if not counts.empty else 0
+    tone = "good" if serap > dist else ("bad" if dist > serap else "neutral")
+    concl = "Serap/akumulasi lebih dominan" if serap > dist else ("Distribusi lebih dominan" if dist > serap else "Sinyal campur / netral")
+
+    bullets = [
+        f"Threshold Big Print (filter): sekitar <b>{_fmt_id(thr)}</b> lot (atau minimal lot).",
+        f"Total lot Big Print terdeteksi: <b>{_fmt_id(total_lot)}</b> lot.",
+        "Dominasi label: " + (", ".join([f"<b>{k}</b> ({int(v)})" for k, v in counts.head(5).items()]) if not counts.empty else "—"),
+        "Baca cepat: <b>Serap</b> = transaksi besar tapi harga tidak jatuh (ada yang nampung). <b>Distribusi</b> = transaksi besar diikuti pelemahan (barang dilepas)."
+    ]
+    return bullets, concl, tone
+
+def make_tradebook_insight(df: pd.DataFrame) -> tuple[list[str], str, str]:
+    if df is None or df.empty:
+        return [], "Trade book kosong.", "neutral"
+    buy_lot = float(df.loc[df["Action"]=="Buy", "Lot"].sum()) if "Action" in df.columns else 0
+    sell_lot = float(df.loc[df["Action"]=="Sell", "Lot"].sum()) if "Action" in df.columns else 0
+    total = buy_lot + sell_lot
+    buy_pct = (buy_lot/total*100) if total else 0
+    tone = "good" if buy_lot > sell_lot else ("bad" if sell_lot > buy_lot else "neutral")
+    concl = "Tekanan beli lebih dominan" if buy_lot > sell_lot else ("Tekanan jual lebih dominan" if sell_lot > buy_lot else "Seimbang")
+    bullets = [
+        f"Total lot agresif: Buy <b>{_fmt_id(buy_lot)}</b> vs Sell <b>{_fmt_id(sell_lot)}</b> (Buy {buy_pct:.1f}%).",
+        "Kalau Buy dominan tapi harga tidak naik → bisa jadi ada supply besar (ditahan). Kalau Buy dominan dan harga naik bertahap → akumulasi rapi.",
+        "Kalau Sell dominan saat harga naik → rawan distribusi (ritel FOMO).",
+    ]
+    return bullets, concl, tone
+
+def make_sankey_distribution_insight(df: pd.DataFrame, metric_col: str = "Value") -> tuple[list[str], str, str]:
+    if df is None or df.empty:
+        return [], "Data broker distribution kosong.", "neutral"
+    # Net per broker (gunakan summari kasar dari buyer/seller)
+    buy = df.groupby("Buyer_Code")[metric_col].sum()
+    sell = df.groupby("Seller_Code")[metric_col].sum()
+    net = buy.subtract(sell, fill_value=0).sort_values(ascending=False)
+
+    top_acc = net.head(5)
+    top_dist = net.tail(5).sort_values()
+
+    bullets = [
+        "Top akumulasi (net buy): " + ", ".join([f"<b>{k}</b> ({format_number_label(v) if metric_col=='Value' else _fmt_id(v)})" for k,v in top_acc.items()]),
+        "Top distribusi (net sell): " + ", ".join([f"<b>{k}</b> ({format_number_label(v) if metric_col=='Value' else _fmt_id(v)})" for k,v in top_dist.items()]),
+    ]
+    # konsentrasi
+    abs_total = float(net.abs().sum())
+    conc = float(top_acc.abs().sum() / abs_total * 100) if abs_total else 0
+    bullets.append(f"Konsentrasi 5 netteratas: <b>{conc:.1f}%</b> (tinggi = lebih 'dikunci' bandar).")
+
+    tone = "good" if top_acc.sum() > abs(top_dist.sum()) else ("bad" if abs(top_dist.sum()) > top_acc.sum() else "neutral")
+    concl = "Net buy lebih dominan" if tone=="good" else ("Net sell lebih dominan" if tone=="bad" else "Netral / campur")
+    return bullets, concl, tone
+
+def overall_conclusion(fd_stats: dict, summ: pd.DataFrame, cons: pd.DataFrame | None, bp: pd.DataFrame | None, df: pd.DataFrame) -> tuple[list[str], str, str]:
+    bullets = []
+    tone = "neutral"
+    # Foreign net
+    netf = float(fd_stats.get("value", {}).get("Net_Foreign", 0)) if fd_stats else 0
+    bullets.append(f"Asing: <b>{'Net Buy' if netf>0 else ('Net Sell' if netf<0 else 'Netral')}</b> (Rp {format_number_label(netf)}).")
+
+    # Broker net
+    net_total = float(summ["Net_Val"].sum()) if summ is not None and not summ.empty else 0
+    bullets.append(f"Broker summary (total net): <b>{'Akumulasi' if net_total>0 else ('Distribusi' if net_total<0 else 'Seimbang')}</b>.")
+
+    # Consistency
+    if cons is not None and not cons.empty:
+        topA = cons[cons["Net_Lot"]>0].head(3)
+        bullets.append("Multi-day top akumulasi: " + (", ".join([f"<b>{r['Code']}</b>" for _, r in topA.iterrows()]) if not topA.empty else "—"))
+
+    # Big print
+    if bp is not None and not bp.empty and "Label" in bp.columns:
+        counts = bp["Label"].value_counts()
+        serap = counts[counts.index.astype(str).str.lower().str.contains("serap")].sum()
+        dist = counts[counts.index.astype(str).str.lower().str.contains("distribusi")].sum()
+        bullets.append(f"Big Print: Serap {int(serap)} vs Distribusi {int(dist)}.")
+    else:
+        bullets.append("Big Print: belum cukup sinyal (atau filter terlalu ketat).")
+
+    # Trade book
+    if df is not None and not df.empty and "Action" in df.columns:
+        buy_lot = float(df.loc[df["Action"]=="Buy", "Lot"].sum())
+        sell_lot = float(df.loc[df["Action"]=="Sell", "Lot"].sum())
+        bullets.append(f"Trade Book: Buy lot {_fmt_id(buy_lot)} vs Sell lot {_fmt_id(sell_lot)}.")
+
+    # Tone + conclusion
+    score = (1 if netf>0 else (-1 if netf<0 else 0)) + (1 if net_total>0 else (-1 if net_total<0 else 0))
+    tone = "good" if score >= 2 else ("bad" if score <= -2 else "neutral")
+    concl = "Bias naik (akumulasi) lebih kuat" if tone=="good" else ("Waspada distribusi / koreksi" if tone=="bad" else "Tunggu konfirmasi (campur/sideways)")
+    return bullets, concl, tone
 
 
 def get_yahoo_session():
@@ -1057,6 +1267,10 @@ def render_broker_summary_split(summ, net_mode=False):
             }).applymap(style_broker_code, subset=["Code"]),
             use_container_width=True, hide_index=True, height=450
         )
+    # --- Insight (Gaya Bandar) ---
+    bullets, concl, tone = make_broker_summary_insight(summ, net_mode=net_mode)
+    render_bandarmology_insight("Kesimpulan Broker Summary", bullets, concl, tone)
+
 
 def render_trade_book(df):
     st.subheader("Trade Book")
@@ -1087,6 +1301,10 @@ def render_trade_book(df):
                 .bar(subset=["Sell_Lot"], color='#7f1d1d'),
             use_container_width=True, hide_index=True, height=400
         )
+
+    bullets, concl, tone = make_tradebook_insight(df)
+    render_bandarmology_insight("Kesimpulan Trade Book", bullets, concl, tone)
+
 
 
 
@@ -1226,6 +1444,9 @@ def render_foreign_domestic_activity(df: pd.DataFrame):
             f"</div>",
             unsafe_allow_html=True,
         )
+    # --- Insight (Gaya Bandar) ---
+    bullets, concl, tone = make_fd_insight(stats, mode_key="value")
+    render_bandarmology_insight("Kesimpulan Foreign–Domestic Activity", bullets, concl, tone)
 
     return stats
 
@@ -1936,11 +2157,29 @@ def big_print_detector(df: pd.DataFrame, q: float = 0.99, min_lot: int = 0, look
             lab = "Big Print"
         labels.append(lab)
     bp["Label"] = labels
+    # Label -> Bahasa Indonesia
+    bp["Label"] = bp["Label"].map(BIG_PRINT_LABEL_ID).fillna(bp["Label"])
     bp["Threshold_Lot"] = thr
     return bp.sort_values("DateTime")
 
 def render_big_print_section(df: pd.DataFrame):
     st.subheader("🧱 Big Print + Absorption/Distribution")
+    with st.expander("📌 Fungsi slider & filter (wajib paham dulu)", expanded=False):
+        st.markdown(
+            '''
+            **Ambang percentile (Lot)**  
+            - Mengambil trade yang ukuran lot-nya berada di atas percentile tertentu (misal 99% = hanya trade terbesar).  
+            - Naikkan percentile ⇒ Big Print lebih sedikit tapi lebih “berat”.
+
+            **Minimal Lot (opsional)**  
+            - Filter tambahan. Kalau diisi, Big Print harus >= minimal lot.  
+            - Berguna kalau sahamnya “rame kecil-kecil” tapi kamu cuma mau nangkep transaksi besar.
+
+            **Lookahead (jumlah trade)**  
+            - Berapa transaksi setelah Big Print yang dipakai untuk menilai: setelah big print harga **ditahan/diangkat (serap/akumulasi)** atau malah **dijatuhin (distribusi)**.  
+            - Lookahead kecil ⇒ lebih sensitif (cepet berubah). Lookahead besar ⇒ lebih stabil tapi “lambat”.
+            '''
+        )
     if df.empty:
         st.info("Data kosong.")
         return
@@ -1967,6 +2206,10 @@ def render_big_print_section(df: pd.DataFrame):
     show_cols = [c for c in show_cols if c in bp.columns]
     st.dataframe(bp[show_cols].sort_values("DateTime", ascending=False).reset_index(drop=True),
                  use_container_width=True, height=420)
+
+
+    bullets, concl, tone = make_bigprint_insight(bp)
+    render_bandarmology_insight("Kesimpulan Big Print + Serap/Distribusi", bullets, concl, tone)
 
 def broker_consistency(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -2046,6 +2289,9 @@ def render_broker_consistency_section(df: pd.DataFrame, start_date: datetime.dat
 
     st.markdown("**Semua Broker (urut Net Val)**")
     st.dataframe(cons.reset_index(drop=True), use_container_width=True, height=520)
+
+    bullets, concl, tone = make_consistency_insight(cons)
+    render_bandarmology_insight("Kesimpulan Broker Consistency (Multi-day)", bullets, concl, tone)
 
 # =========================================================
 # 11. BANDARMOLOGY PAGE (UPDATED)
@@ -2161,7 +2407,7 @@ def bandarmology_page():
         # Top marquee
         render_top10_marquee()
 
-        st.title(f"📊 Bandarmology {current_stock}")
+        st.title(f"📊 Technical & Valuation Snapshot — {current_stock}")
 
         # Metrics Top
         col1, col2, col3, col4 = st.columns(4)
@@ -2218,7 +2464,7 @@ def bandarmology_page():
 
         st.markdown("---")
 
-        st.subheader("🕸️ Broker Flow (Sankey)")
+        st.subheader("🕸️ Broker Distribution (Sankey)")
         left, right = st.columns([2, 1])
         with left:
             metric_choice = st.radio("Metrik", ["Value (Dana)", "Lot (Volume)"], horizontal=True)
@@ -2241,12 +2487,28 @@ def bandarmology_page():
                 plot_bgcolor="rgba(0,0,0,0)",
             )
             st.plotly_chart(fig, use_container_width=True)
+            bullets, concl, tone = make_sankey_distribution_insight(df, metric_col=metric_col)
+            render_bandarmology_insight("Kesimpulan Broker Distribution", bullets, concl, tone)
         except Exception:
             st.info("Sankey tidak bisa dibuat untuk data ini (mungkin data terlalu sedikit).")
 
-        # Kesimpulan / Insight di paling bawah (sesuai request)
+        # Kesimpulan keseluruhan (sesuai semua visual)
         st.markdown("---")
-        render_insight_box(df, summ, fd_stats)
+        # Recompute konsistensi & big print untuk rangkuman (ringan)
+        cons_all = None
+        try:
+            cons_all = broker_consistency(df)
+        except Exception:
+            cons_all = None
+        bp_all = None
+        try:
+            # pakai setting default yang sama seperti UI (99% / min 0 / lookahead 15)
+            bp_all = big_print_detector(df, q=0.99, min_lot=0, lookahead_trades=15)
+        except Exception:
+            bp_all = None
+
+        bullets, concl, tone = overall_conclusion(fd_stats, summ, cons_all, bp_all, df)
+        render_bandarmology_insight("Kesimpulan Keseluruhan", bullets, concl, tone)
 
     except Exception as e:
         st.error("Terjadi error saat memproses data. Cek format file kamu.")
@@ -2407,6 +2669,122 @@ def daftar_saham_page():
         height=600,
     )
 
+
+
+# =========================================================
+# 13. PAGE BARU: KAMUS ISTILAH SAHAM (CSV)
+# =========================================================
+@st.cache_data
+def load_kamus_csv(path: str = "kamus-saham.csv") -> pd.DataFrame:
+    # cari file di folder script atau /mnt/data (jika jalan di sandbox)
+    if not os.path.exists(path) and os.path.exists(os.path.join('/mnt/data', path)):
+        path = os.path.join('/mnt/data', path)
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=["Istilah", "Definisi"])
+    df = pd.read_csv(path)
+    df.columns = [str(c).strip() for c in df.columns]
+    # Normalisasi: kalau kolom tidak standar, coba pakai 2 kolom pertama
+    if "Istilah" not in df.columns or "Definisi" not in df.columns:
+        if len(df.columns) >= 2:
+            df = df.rename(columns={df.columns[0]: "Istilah", df.columns[1]: "Definisi"})
+    if "Istilah" not in df.columns:
+        df["Istilah"] = ""
+    if "Definisi" not in df.columns:
+        df["Definisi"] = ""
+    df["Istilah"] = df["Istilah"].astype(str).str.strip()
+    df["Definisi"] = df["Definisi"].astype(str).str.strip()
+    df = df.dropna(subset=["Istilah"]).drop_duplicates(subset=["Istilah"])
+    return df.sort_values("Istilah").reset_index(drop=True)
+
+def kamus_page():
+    st.title("📚 Kamus Istilah Saham")
+    st.caption("Cari cepat + tampilan seperti FAQ (klik untuk buka definisi).")
+
+    with st.sidebar:
+        st.markdown("### 📥 Data Kamus (opsional)")
+        up = st.file_uploader("Upload kamus CSV", type=["csv"], key="kamus_upload")
+        if up is not None:
+            try:
+                dfu = pd.read_csv(up)
+                dfu.to_csv("kamus-saham.csv", index=False)
+                st.toast("Kamus di-update dari upload.", icon="✅")
+            except Exception:
+                st.warning("CSV kamus gagal dibaca.")
+
+    df = load_kamus_csv("kamus-saham.csv")
+    if df.empty:
+        st.info("File **kamus-saham.csv** belum ditemukan / kosong.")
+        return
+
+    q = st.text_input("Filter istilah / kata kunci", placeholder="contoh: akumulasi, ARB, dividen ...")
+    if q:
+        qq = q.strip().lower()
+        df = df[df["Istilah"].str.lower().str.contains(qq, na=False) | df["Definisi"].str.lower().str.contains(qq, na=False)]
+
+    st.write(f"Menampilkan **{len(df)}** istilah.")
+    for _, r in df.iterrows():
+        with st.expander(str(r["Istilah"]), expanded=False):
+            st.write(str(r["Definisi"]))
+
+# =========================================================
+# 14. PAGE BARU: EDUKASI (YouTube dari CSV)
+# =========================================================
+@st.cache_data
+def load_edukasi_csv(path: str = "daftar-edukasi.csv") -> pd.DataFrame:
+    # cari file di folder script atau /mnt/data (jika jalan di sandbox)
+    if not os.path.exists(path) and os.path.exists(os.path.join('/mnt/data', path)):
+        path = os.path.join('/mnt/data', path)
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=["Kategori", "Link"])
+    df = pd.read_csv(path)
+    df.columns = [str(c).strip() for c in df.columns]
+    if "Link" not in df.columns:
+        # fallback: cari kolom yang mirip
+        for c in df.columns:
+            if "link" in c.lower() or "url" in c.lower():
+                df = df.rename(columns={c: "Link"})
+                break
+    if "Kategori" not in df.columns:
+        df["Kategori"] = "Lainnya"
+    df["Kategori"] = df["Kategori"].ffill().fillna("Lainnya").astype(str).str.strip()
+    df["Link"] = df["Link"].astype(str).str.strip()
+    df = df[df["Link"].str.startswith("http")]
+    return df.reset_index(drop=True)
+
+def edukasi_page():
+    st.title("🎓 Edukasi (Video YouTube)")
+    st.caption("Preview video langsung. Data diambil dari **daftar-edukasi.csv** (kamu bisa tambah kapan saja).")
+
+    with st.sidebar:
+        st.markdown("### 📥 Data Edukasi (opsional)")
+        up = st.file_uploader("Upload edukasi CSV", type=["csv"], key="edukasi_upload")
+        if up is not None:
+            try:
+                dfu = pd.read_csv(up)
+                dfu.to_csv("daftar-edukasi.csv", index=False)
+                st.toast("Daftar edukasi di-update dari upload.", icon="✅")
+            except Exception:
+                st.warning("CSV edukasi gagal dibaca.")
+
+    df = load_edukasi_csv("daftar-edukasi.csv")
+    if df.empty:
+        st.info("File **daftar-edukasi.csv** belum ditemukan / kosong.")
+        return
+
+    cats = ["Semua"] + sorted(df["Kategori"].dropna().astype(str).unique().tolist())
+    pick = st.selectbox("Filter kategori", cats, index=0)
+
+    dfv = df if pick == "Semua" else df[df["Kategori"] == pick]
+
+    for cat, g in dfv.groupby("Kategori", sort=False):
+        st.subheader(cat)
+        for _, row in g.iterrows():
+            st.video(row["Link"])
+            if "Judul" in row.index and pd.notna(row.get("Judul")):
+                st.caption(str(row.get("Judul")))
+            else:
+                st.caption(row["Link"])
+
 # =========================================================
 # 12. MAIN ROUTER
 # =========================================================
@@ -2424,7 +2802,7 @@ def main():
         st.markdown("---")
         page = st.radio(
             "Menu",
-            ["Bandarmology", "Daftar Broker", "Daftar Saham"],
+            ["Technical & Valuation Snapshot", "Kamus", "Edukasi", "Daftar Broker", "Daftar Saham"],
             index=0,
             key="main_menu",
         )
@@ -2435,8 +2813,12 @@ def main():
             st.session_state["current_stock"] = "UNKNOWN"
             st.rerun()
 
-    if page == "Bandarmology":
+    if page == "Technical & Valuation Snapshot":
         bandarmology_page()
+    elif page == "Kamus":
+        kamus_page()
+    elif page == "Edukasi":
+        edukasi_page()
     elif page == "Daftar Broker":
         daftar_broker_page()
     else:
