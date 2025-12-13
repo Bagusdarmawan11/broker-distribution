@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import re
@@ -602,6 +603,187 @@ def make_sankey_distribution_insight(df: pd.DataFrame, metric_col: str = "Value"
     tone = "good" if top_acc.sum() > abs(top_dist.sum()) else ("bad" if abs(top_dist.sum()) > top_acc.sum() else "neutral")
     concl = "Net buy lebih dominan" if tone=="good" else ("Net sell lebih dominan" if tone=="bad" else "Netral / campur")
     return bullets, concl, tone
+
+
+
+# =========================================================
+# 0. PANEL TOP: SINYAL HARI INI + SKOR BANDAR + RED FLAGS
+# =========================================================
+def compute_bandar_score(fd_stats: dict, summ: pd.DataFrame, cons: pd.DataFrame | None, bp: pd.DataFrame | None, df: pd.DataFrame):
+    """
+    Skor 0-100 (heuristik) untuk memudahkan ritel memahami 'bias bandar' intraday.
+    Ini BUKAN rekomendasi investasi.
+    Return:
+      score (int), bias_label (str), components(list[tuple[name, pts, note]]), red_flags(list[str]), reasons(list[str])
+    """
+    # --- 1) Foreign component (0-30) ---
+    netf = float(fd_stats.get("value", {}).get("Net_Foreign", 0)) if fd_stats else 0.0
+    f_buy = float(fd_stats.get("value", {}).get("F_Buy", 0)) if fd_stats else 0.0
+    f_sell = float(fd_stats.get("value", {}).get("F_Sell", 0)) if fd_stats else 0.0
+    f_turn = max(f_buy + f_sell, 1.0)
+    f_ratio = max(-1.0, min(1.0, netf / f_turn))
+    score_foreign = int(round(15 * (f_ratio + 1)))  # 0..30
+
+    # --- 2) Broker net component (0-25) ---
+    score_broker = 12
+    broker_ratio = 0.0
+    net_total = 0.0
+    if summ is not None and not summ.empty:
+        net_total = float(summ.get("Net_Val", pd.Series([0])).sum())
+        turn = float(summ.get("Buy_Val", pd.Series([0])).sum() + summ.get("Sell_Val", pd.Series([0])).sum())
+        turn = max(turn, 1.0)
+        broker_ratio = max(-1.0, min(1.0, net_total / turn))
+        score_broker = int(round(12.5 * (broker_ratio + 1)))  # 0..25
+
+    # --- 3) Multi-day consistency component (0-25) ---
+    score_cons = 12
+    cons_bias = 0.0
+    if cons is not None and not cons.empty and "Net_Lot" in cons.columns:
+        top = cons.copy()
+        # fokus 10 broker paling aktif (abs net lot besar)
+        top = top.reindex(top["Net_Lot"].abs().sort_values(ascending=False).head(10).index)
+        denom = float(top["Net_Lot"].abs().sum()) or 1.0
+        cons_bias = float(top["Net_Lot"].sum()) / denom  # -1..1
+        cons_bias = max(-1.0, min(1.0, cons_bias))
+        # reliability factor dari Days_Active (biar nggak overreact 1 hari)
+        if "Days_Active" in top.columns and top["Days_Active"].notna().any():
+            rel = float(top["Days_Active"].mean())
+            rel_factor = max(0.4, min(1.0, rel / 3.0))
+        else:
+            rel_factor = 0.7
+        score_cons = int(round(12.5 * (cons_bias + 1) * rel_factor))  # 0..25 (aproks)
+
+    # --- 4) Big Print component (0-15) ---
+    score_bp = 7
+    bp_bias = 0.0
+    if bp is not None and not bp.empty and "Label" in bp.columns:
+        counts = bp["Label"].astype(str).str.lower().value_counts()
+        serap = int(counts[counts.index.str.contains("serap")].sum()) if not counts.empty else 0
+        dist = int(counts[counts.index.str.contains("distribusi")].sum()) if not counts.empty else 0
+        denom = max(serap + dist, 1)
+        bp_bias = (serap - dist) / denom  # -1..1
+        bp_bias = max(-1.0, min(1.0, bp_bias))
+        score_bp = int(round(7.5 * (bp_bias + 1)))  # 0..15
+
+    # --- 5) Trade book pressure component (0-5) ---
+    score_tb = 2
+    tb_bias = 0.0
+    if df is not None and not df.empty and "Action" in df.columns and "Lot" in df.columns:
+        xx = df[df["Action"].isin(["Buy", "Sell"])].copy()
+        if not xx.empty:
+            buy_l = float(xx.loc[xx["Action"] == "Buy", "Lot"].sum())
+            sell_l = float(xx.loc[xx["Action"] == "Sell", "Lot"].sum())
+            denom = max(buy_l + sell_l, 1.0)
+            tb_bias = (buy_l - sell_l) / denom
+            tb_bias = max(-1.0, min(1.0, tb_bias))
+            score_tb = int(round(2.5 * (tb_bias + 1)))  # 0..5
+
+    # Total score
+    score = int(np.clip(score_foreign + score_broker + score_cons + score_bp + score_tb, 0, 100))
+
+    # Bias label
+    if score >= 65:
+        bias = "AKUMULASI (bullish bandar)"
+    elif score <= 35:
+        bias = "DISTRIBUSI (waspada bandar)"
+    else:
+        bias = "NETRAL / CAMPUR"
+
+    # Transparansi komponen
+    components = [
+        ("Asing (Net)", score_foreign, f"Net/turnover asing ≈ {f_ratio:+.2f}"),
+        ("Broker Summary (Net)", score_broker, f"Net/turnover broker ≈ {broker_ratio:+.2f}"),
+        ("Konsistensi Multi-day", score_cons, f"Bias net lot ≈ {cons_bias:+.2f}"),
+        ("Big Print (Serap vs Distribusi)", score_bp, f"Bias label ≈ {bp_bias:+.2f}"),
+        ("Trade Book (Buy vs Sell)", score_tb, f"Tekanan lot ≈ {tb_bias:+.2f}"),
+    ]
+
+    # Red Flags (aturan sederhana)
+    red_flags = []
+    # VWAP & last price untuk konteks
+    vwap = 0.0
+    last_price = None
+    if df is not None and not df.empty and "Value" in df.columns and "Lot" in df.columns:
+        tv = float(df["Value"].sum())
+        tl = float(df["Lot"].sum())
+        vwap = (tv / (tl * 100)) if tl else 0.0
+    if df is not None and not df.empty and "DateTime" in df.columns and df["DateTime"].notna().any():
+        last_row = df.sort_values("DateTime").dropna(subset=["DateTime"]).iloc[-1]
+        last_price = float(last_row.get("Price", np.nan)) if "Price" in last_row else None
+
+    # 1) Asing jual tapi harga di atas VWAP (rawan distribusi)
+    if netf < 0 and vwap > 0 and last_price is not None and last_price > vwap:
+        red_flags.append("Asing **net sell** tapi harga di atas **VWAP** → rawan distribusi di atas (harga 'diangkat' saat barang dilepas).")
+
+    # 2) Big print distribusi dominan tapi trade book buy dominan (rawan trap)
+    if bp_bias < -0.25 and tb_bias > 0.20:
+        red_flags.append("Big Print dominan **distribusi** tapi tekanan **buy** tinggi → potensi **trap / FOMO** (ritel nyerap barang bandar).")
+
+    # 3) Broker net distribusi saat skor total masih tinggi (sinyal campur)
+    if net_total < 0 and score >= 65:
+        red_flags.append("Skor tinggi tapi broker total net **distribusi** → sinyal campur, butuh konfirmasi struktur harga.")
+
+    # 4) Konsistensi lemah: net besar tapi skor konsistensi rendah
+    if cons is not None and not cons.empty and "Consistency_Score" in cons.columns and "Net_Val" in cons.columns:
+        leader = cons.iloc[0]
+        if float(leader.get("Net_Val", 0)) > 0 and float(leader.get("Consistency_Score", 50)) < 55:
+            red_flags.append("Broker leader net buy tapi **tidak konsisten** (Consistency < 55) → bisa one-off / bukan kerja multi-hari.")
+
+    # Reasons (highlight)
+    reasons = []
+    if netf > 0:
+        reasons.append("Asing cenderung **akumulasi** (net buy).")
+    elif netf < 0:
+        reasons.append("Asing cenderung **distribusi** (net sell).")
+
+    if net_total > 0:
+        reasons.append("Agregat broker menunjukkan **akumulasi** (net buy).")
+    elif net_total < 0:
+        reasons.append("Agregat broker menunjukkan **distribusi** (net sell).")
+
+    if bp_bias > 0.25:
+        reasons.append("Big Print lebih banyak **serap/akumulasi**.")
+    elif bp_bias < -0.25:
+        reasons.append("Big Print lebih banyak **distribusi**.")
+
+    if cons_bias > 0.20:
+        reasons.append("Broker yang konsisten condong **net buy multi-day**.")
+    elif cons_bias < -0.20:
+        reasons.append("Broker konsisten condong **net sell multi-day**.")
+
+    return score, bias, components, red_flags, reasons
+
+
+def render_signal_panel(fd_stats: dict, summ: pd.DataFrame, cons: pd.DataFrame | None, bp: pd.DataFrame | None, df: pd.DataFrame):
+    score, bias, components, red_flags, reasons = compute_bandar_score(fd_stats, summ, cons, bp, df)
+
+    st.markdown("### 🧠 Sinyal Hari Ini (Ringkas)")
+    c1, c2, c3 = st.columns([1.2, 1, 1])
+    with c1:
+        st.metric("Bias", bias)
+    with c2:
+        st.metric("Skor Bandar", f"{score}/100")
+    with c3:
+        st.metric("Red Flags", f"{len(red_flags)}")
+
+    # alasan utama (maks 5)
+    if reasons:
+        st.caption("**Alasan cepat:** " + " • ".join(reasons[:5]))
+
+    # Detail skor (transparan)
+    with st.expander("🔍 Transparansi Skor Bandar (komponen penilaian)", expanded=False):
+        for name, pts, note in components:
+            st.write(f"- **{name}**: **{pts} pts** — {note}")
+        st.caption("Catatan: Ini heuristik untuk edukasi; tetap cocokkan dengan struktur harga & volume.")
+
+    # Red flags
+    if red_flags:
+        with st.expander("⚠️ Red Flags (Wajib dicek)", expanded=True):
+            for rf in red_flags:
+                st.warning(rf)
+    else:
+        st.success("Tidak ada red flag utama yang terdeteksi dari aturan sederhana (tetap waspada kondisi pasar).")
+
 
 def overall_conclusion(fd_stats: dict, summ: pd.DataFrame, cons: pd.DataFrame | None, bp: pd.DataFrame | None, df: pd.DataFrame) -> tuple[list[str], str, str]:
     bullets = []
@@ -1229,6 +1411,9 @@ def render_broker_action_meter(summ):
 
 def render_broker_summary_split(summ, net_mode=False):
     st.subheader("Broker Summary")
+
+    with st.expander("📖 Cara baca cepat (Broker Summary)", expanded=False):
+        st.markdown('\n- **Net Mode ON**: fokus *siapa akumulasi vs distribusi*.  \n- Cari broker yang **net buy besar + muncul berulang** → kandidat tangan besar.  \n- Waspada kalau harga naik tapi yang muncul dominan **net sell** (distribusi di atas).\n        ')
     
     # Logic: 
     # Jika Net Mode ON: Tampilkan Top Net Buy (Accum) di kiri, Top Net Sell (Dist) di kanan
@@ -1274,6 +1459,9 @@ def render_broker_summary_split(summ, net_mode=False):
 
 def render_trade_book(df):
     st.subheader("Trade Book")
+
+    with st.expander("📖 Cara baca cepat (Trade Book)", expanded=False):
+        st.markdown('\n- Lihat price table: area harga dengan **Buy_Lot tinggi** bisa jadi support (serapan).  \n- Kalau **Sell_Lot** besar muncul di area atas, itu sering jadi resistance / distribusi.  \n- Chart kumulatif: buy naik stabil tanpa drop tajam → tape sehat; spike buy lalu cepat dibalas sell → rawan trap.\n        ')
     price_df, chart_df = prepare_trade_book_data(df)
     
     tab1, tab2 = st.tabs(["Chart", "Price Table"])
@@ -1365,6 +1553,9 @@ def compute_foreign_domestic_activity(df: pd.DataFrame):
 
 def render_foreign_domestic_activity(df: pd.DataFrame):
     st.subheader("Foreign–Domestic Activity")
+
+    with st.expander("📖 Cara baca cepat (Foreign–Domestic)", expanded=False):
+        st.markdown('\n- **Net Foreign** positif → asing akumulasi; negatif → asing distribusi.  \n- Lihat juga porsi **Foreign %**: makin besar artinya asing makin dominan menggerakkan tape.  \n- Konfirmasi: kalau asing net buy tapi harga nggak naik, berarti ada supply besar yang nahan (perlu waspada).\n        ')
 
     stats = compute_foreign_domestic_activity(df)
 
@@ -2139,20 +2330,20 @@ def big_print_detector(df: pd.DataFrame, q: float = 0.99, min_lot: int = 0, look
             if abs(pct) <= 0.10:
                 lab = "Absorption (Buy, price flat)"
             elif pct > 0.25:
-                lab = "Impulse Up (Buy)"
+                lab = "Dorong Naik (Beli agresif)"
             elif pct < -0.25:
-                lab = "Failed Buy / Supply"
+                lab = "Buy Gagal / Supply Kuat"
             else:
-                lab = "Big Buy"
+                lab = "Big Buy (Beli besar)"
         elif row["Action"] == "Sell":
             if abs(pct) <= 0.10:
-                lab = "Absorption (Sell absorbed)"
+                lab = "Serap (Jual diserap)"
             elif pct < -0.25:
-                lab = "Distribution (Sell)"
+                lab = "Distribusi (Jual besar)"
             elif pct > 0.25:
                 lab = "Squeeze / Trap Sell"
             else:
-                lab = "Big Sell"
+                lab = "Big Sell (Jual besar)"
         else:
             lab = "Big Print"
         labels.append(lab)
@@ -2265,6 +2456,9 @@ def broker_consistency(df: pd.DataFrame) -> pd.DataFrame:
 
 def render_broker_consistency_section(df: pd.DataFrame, start_date: datetime.date, end_date: datetime.date):
     st.subheader("🏦 Broker Consistency + Top Accumulation (Multi-day)")
+
+    with st.expander("📖 Cara baca cepat (Broker Consistency Multi-day)", expanded=False):
+        st.markdown('\n- **Days_Active** tinggi → broker sering muncul (konsisten).  \n- **Consistency_Score** mendekati 100 → lebih sering net buy; mendekati 0 → lebih sering net sell.  \n- Kombinasi paling kuat: **Days tinggi + Net besar + Score tinggi** (akumulasi multi-hari).\n        ')
     if df.empty:
         st.info("Data kosong.")
         return
@@ -2421,6 +2615,21 @@ def bandarmology_page():
         col4.metric("Net Foreign", f"Rp {format_number_label(foreign_net_val)}",
                     delta="Net Buy" if foreign_net_val>0 else ("Net Sell" if foreign_net_val<0 else "Flat"))
 
+        
+        # Panel ringkas: Sinyal Hari Ini + Skor Bandar + Red Flags
+        cons_panel = None
+        bp_panel = None
+        try:
+            cons_panel = broker_consistency(df)
+        except Exception:
+            cons_panel = None
+        try:
+            bp_panel = big_print_detector(df, q=0.99, min_lot=0, lookahead_trades=15)
+        except Exception:
+            bp_panel = None
+
+        render_signal_panel(fd_stats, summ, cons_panel, bp_panel, df)
+
         st.markdown("---")
 
         # Candlestick (Yahoo)
@@ -2465,6 +2674,15 @@ def bandarmology_page():
         st.markdown("---")
 
         st.subheader("🕸️ Broker Distribution (Sankey)")
+
+        with st.expander("📖 Cara baca cepat (Broker Distribution)", expanded=False):
+            st.markdown("""
+- Diagram ini menunjukkan **siapa mendistribusikan ke siapa** (node = broker, link = aliran lot/value).
+- Link tebal/besar = transaksi yang dominan.
+- Jika aliran netterkonsentrasi di sedikit broker → seringnya ada **tangan besar** yang kerja terstruktur.
+- Kalau aliran menyebar ke banyak broker ritel → rawan **distribution ke publik**.
+            """)
+
         left, right = st.columns([2, 1])
         with left:
             metric_choice = st.radio("Metrik", ["Value (Dana)", "Lot (Volume)"], horizontal=True)
@@ -2497,13 +2715,13 @@ def bandarmology_page():
         # Recompute konsistensi & big print untuk rangkuman (ringan)
         cons_all = None
         try:
-            cons_all = broker_consistency(df)
+            cons_all = cons_panel if 'cons_panel' in locals() else broker_consistency(df)
         except Exception:
             cons_all = None
         bp_all = None
         try:
             # pakai setting default yang sama seperti UI (99% / min 0 / lookahead 15)
-            bp_all = big_print_detector(df, q=0.99, min_lot=0, lookahead_trades=15)
+            bp_all = bp_panel if 'bp_panel' in locals() else big_print_detector(df, q=0.99, min_lot=0, lookahead_trades=15)
         except Exception:
             bp_all = None
 
