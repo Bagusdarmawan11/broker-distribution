@@ -376,11 +376,23 @@ def render_footer():
 # 5. TOOLS LAIN (YAHOO TICKER, FORMAT, DLL)
 # =========================================================
 def format_number_label(value):
-    """Format angka biar mirip tampilan sekuritas (IDR): K/M/B/T."""
+    """Format angka untuk IDR: K/M/B/T (K=ribu, M=juta, B=miliar, T=triliun)."""
     try:
         value = float(value)
     except Exception:
         return str(value)
+    if pd.isna(value):
+        return "0"
+    abs_val = abs(value)
+    if abs_val >= 1e12:
+        return f"{value/1e12:.2f}T"
+    if abs_val >= 1e9:
+        return f"{value/1e9:.2f}B"
+    if abs_val >= 1e6:
+        return f"{value/1e6:.2f}M"
+    if abs_val >= 1e3:
+        return f"{value/1e3:.2f}K"
+    return f"{value:,.0f}"
 
 
 def format_lot_label(value):
@@ -697,23 +709,43 @@ def clean_running_trade(df_input: pd.DataFrame, trade_date: datetime.date | None
         return out.fillna(0).astype(int)
 
     def _parse_first_number_series(s: pd.Series) -> pd.Series:
-        """Ambil angka pertama dari string (penting untuk Price seperti '1,190 (+2.15%)')."""
+        """Ambil angka pertama dari string.
+        Penting untuk Price seperti '1,190 (+2.15%)' atau '1.190 (+2,15%)'.
+        """
         def _one(x):
             if pd.isna(x):
-                return float('nan')
+                return float("nan")
             t = str(x)
             m = re.search(r"([0-9][0-9,\.]+)", t)
             if not m:
-                return float('nan')
-            num = m.group(1).replace(",", "")
-            if num.endswith("."):
-                num = num[:-1]
+                return float("nan")
+            num = m.group(1)
+
+            # Normalisasi pemisah ribuan/desimal
+            if "," in num and "." in num:
+                # Aman untuk price: buang keduanya (umumnya pemisah ribuan)
+                num_clean = num.replace(".", "").replace(",", "")
+            elif "," in num:
+                # Umumnya pemisah ribuan
+                num_clean = num.replace(",", "")
+            elif "." in num:
+                parts = num.split(".")
+                # Kalau 3 digit di belakang, biasanya pemisah ribuan (1.190)
+                if len(parts[-1]) == 3:
+                    num_clean = "".join(parts)
+                else:
+                    num_clean = num  # decimal
+            else:
+                num_clean = num
+
             try:
-                return float(num)
+                return float(num_clean)
             except Exception:
-                return float('nan')
+                return float("nan")
+
         out = s.apply(_one)
         return pd.to_numeric(out, errors="coerce")
+
 
     def _parse_lot_series(s: pd.Series) -> pd.Series:
         """Lot bisa integer, bisa juga desimal kecil (mis. 0.06)."""
