@@ -1432,119 +1432,617 @@ def login_page():
 # =========================================================
 # 9. HALAMAN UTAMA (BANDARMOLOGY)
 # =========================================================
+
+# =========================================================
+# 11.5 OVERRIDES & FITUR BARU (Multi-day + Big Print + Yahoo)
+# =========================================================
+
+# Default top 10 "big caps" IHSG (bisa kamu edit sesuai kebutuhan)
+TOP10_IHSG_TICKERS = [
+    "BBCA","BBRI","BMRI","TLKM","ASII","UNVR","ICBP","TPIA","ADRO","MDKA"
+]
+
+MONTH_NAME_TO_NUM = {
+    "januari": 1, "jan": 1, "january": 1,
+    "februari": 2, "feb": 2, "february": 2,
+    "maret": 3, "mar": 3, "march": 3,
+    "april": 4, "apr": 4,
+    "mei": 5, "may": 5,
+    "juni": 6, "jun": 6, "june": 6,
+    "juli": 7, "jul": 7, "july": 7,
+    "agustus": 8, "agu": 8, "aug": 8, "august": 8,
+    "september": 9, "sep": 9,
+    "oktober": 10, "okt": 10, "oct": 10, "october": 10,
+    "november": 11, "nov": 11,
+    "desember": 12, "des": 12, "dec": 12, "december": 12,
+}
+
+def _extract_trade_date_from_filepath(fp: str) -> datetime.date | None:
+    """Ambil tanggal dari path database/{SAHAM}/{YYYY}/{BULAN}/{DD}.csv atau DD_*.csv"""
+    try:
+        p = Path(fp)
+        parts = [x for x in p.parts]
+        # cari tahun 4 digit
+        year = None
+        for x in parts:
+            if re.fullmatch(r"\d{4}", x):
+                year = int(x); break
+        if year is None:
+            return None
+        # cari nama bulan (folder setelah tahun biasanya bulan)
+        month = None
+        if str(year) in parts:
+            idx = parts.index(str(year))
+            if idx+1 < len(parts):
+                mname = parts[idx+1].strip().lower()
+                month = MONTH_NAME_TO_NUM.get(mname)
+        if month is None:
+            # fallback: cari token bulan di path
+            for x in parts:
+                m = MONTH_NAME_TO_NUM.get(str(x).strip().lower())
+                if m:
+                    month = m; break
+        if month is None:
+            return None
+        # ambil day dari nama file (leading number)
+        stem = p.stem
+        mday = re.match(r"^\s*(\d{1,2})", stem)
+        if not mday:
+            return None
+        day = int(mday.group(1))
+        return datetime.date(year, month, day)
+    except Exception:
+        return None
+
+def resolve_database_files_range(db_root: str, stock: str, start_date: datetime.date, end_date: datetime.date) -> list[str]:
+    """Kumpulkan semua file yang tersedia untuk rentang tanggal (inklusif)."""
+    fps: list[str] = []
+    d = start_date
+    while d <= end_date:
+        fps.extend(resolve_database_files(db_root, stock, d))
+        d += datetime.timedelta(days=1)
+    # de-dup
+    seen = set()
+    out = []
+    for fp in fps:
+        k = str(fp)
+        if k not in seen:
+            out.append(fp); seen.add(k)
+    return out
+
+def load_database_files(filepaths: list[str]) -> pd.DataFrame:
+    """Override: load multi file + inject TradeDate dari path untuk multi-day analysis."""
+    frames = []
+    for fp in filepaths:
+        try:
+            if fp.lower().endswith(".csv"):
+                dfp = pd.read_csv(fp)
+            else:
+                dfp = pd.read_excel(fp)
+            dfp["__source_file"] = os.path.basename(fp)
+            td = _extract_trade_date_from_filepath(fp)
+            if td is not None:
+                dfp["TradeDate"] = td
+            frames.append(dfp)
+        except Exception:
+            continue
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+def clean_running_trade(df_input: pd.DataFrame, trade_date: datetime.date | None = None, volume_mode: str = "LOT"):
+    """Override:
+    - Price ambil angka pertama (fix '1,190 (+2.15%)')
+    - Lot selalu dianggap LOT (1 lot = 100 saham)
+    - Kalau ada kolom TradeDate per baris, DateTime dibentuk per baris (multi-day)
+    """
+    if df_input is None or df_input.empty:
+        return pd.DataFrame()
+
+    df = df_input.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+    col_lut = {str(c).strip().lower(): str(c).strip() for c in df.columns}
+
+    rename_map = {
+        "time": "Time", "waktu": "Time", "jam": "Time", "timestamp": "Time", "datetime": "Time",
+        "price": "Price", "harga": "Price", "last": "Price",
+        "lot": "Lot", "vol": "Lot", "volume": "Lot", "qty": "Lot", "quantity": "Lot",
+        "buyer": "Buyer", "b": "Buyer", "buyer broker": "Buyer", "broker beli": "Buyer",
+        "seller": "Seller", "s": "Seller", "seller broker": "Seller", "broker jual": "Seller",
+        "action": "Action", "type": "Action", "side": "Action", "bs": "Action",
+        "market": "Market",
+        "tradedate": "TradeDate", "date": "TradeDate", "__tradedate": "TradeDate",
+    }
+    for low, old in col_lut.items():
+        if low in rename_map:
+            df.rename(columns={old: rename_map[low]}, inplace=True)
+
+    required = {"Price", "Lot", "Buyer", "Seller"}
+    if not required.issubset(set(df.columns)):
+        raise ValueError("Kolom wajib tidak lengkap. Minimal harus ada: Price, Lot, Buyer, Seller.")
+
+    def _clean_code(x) -> str:
+        s = str(x).upper().strip()
+        m = re.search(r"\b([A-Z]{2})\b", s)
+        return m.group(1) if m else (s.split()[0] if s else "")
+
+    def _extract_origin(x) -> str | None:
+        # sumber file kamu punya tag [F] / [D]
+        m = re.search(r"\[\s*([FD])\s*\]", str(x).upper())
+        return m.group(1) if m else None
+
+    def _parse_first_number(x) -> float:
+        if pd.isna(x):
+            return float("nan")
+        t = str(x)
+        m = re.search(r"([0-9][0-9,\.]+)", t)
+        if not m:
+            return float("nan")
+        num = m.group(1)
+        if "," in num and "." in num:
+            num = num.replace(".", "").replace(",", "")
+        elif "," in num:
+            num = num.replace(",", "")
+        else:
+            parts = num.split(".")
+            if len(parts) > 1 and len(parts[-1]) == 3:
+                num = "".join(parts)
+        try:
+            return float(num)
+        except Exception:
+            return float("nan")
+
+    def _parse_time_to_dt_local(t, base_date: datetime.date):
+        # pakai parser lama (yang sudah toleran)
+        return _parse_time_to_dt(t, base_date)
+
+    # Price
+    df["Price"] = df["Price"].apply(_parse_first_number)
+    df["Price"] = pd.to_numeric(df["Price"], errors="coerce").fillna(0).astype(int)
+
+    # Lot
+    df["Lot"] = pd.to_numeric(df["Lot"].astype(str).str.replace(r"[^0-9\.]", "", regex=True), errors="coerce").fillna(0)
+    df["Lot"] = df["Lot"].round(0).astype("int64")
+    df["Shares"] = (df["Lot"] * 100).astype("int64")
+
+    # Broker code + origin
+    df["Buyer_Code"] = df["Buyer"].apply(_clean_code)
+    df["Seller_Code"] = df["Seller"].apply(_clean_code)
+    df["Buyer_Origin"] = df["Buyer"].apply(_extract_origin)
+    df["Seller_Origin"] = df["Seller"].apply(_extract_origin)
+
+    # Action
+    if "Action" in df.columns:
+        def _norm_action(x):
+            s = str(x).strip().lower()
+            if "buy" in s or s.startswith("b"):
+                return "Buy"
+            if "sell" in s or s.startswith("s"):
+                return "Sell"
+            return "Unknown"
+        df["Action"] = df["Action"].apply(_norm_action)
+    else:
+        df["Action"] = "Unknown"
+
+    # TradeDate
+    if "TradeDate" in df.columns:
+        df["TradeDate"] = pd.to_datetime(df["TradeDate"], errors="coerce").dt.date
+    else:
+        base_date = trade_date or datetime.date.today()
+        df["TradeDate"] = base_date
+
+    # DateTime per row
+    df["Time_Str"] = df["Time"].astype(str).str.strip()
+    df["DateTime"] = df.apply(lambda r: _parse_time_to_dt_local(r["Time"], r["TradeDate"]), axis=1)
+    df["Time_Obj"] = pd.to_datetime(df["DateTime"], errors="coerce").dt.time
+
+    # Value
+    df["Value"] = df["Shares"] * df["Price"]
+
+    # basic validity
+    df = df[(df["Price"] > 0) & (df["Lot"] > 0)].copy()
+    return df
+
+def compute_foreign_domestic_activity(df: pd.DataFrame):
+    """Override: pakai tag [F]/[D] dari file jika ada (lebih mirip sekuritas).
+    F Buy  : Buyer_Origin == 'F' (fallback: broker group Asing)
+    F Sell : Seller_Origin == 'F' (fallback: broker group Asing)
+    """
+    dfx = df.copy()
+
+    def _is_foreign_buy(row):
+        if row.get("Buyer_Origin") in ("F", "D"):
+            return row.get("Buyer_Origin") == "F"
+        return get_broker_group(row.get("Buyer_Code")) == "Asing"
+
+    def _is_foreign_sell(row):
+        if row.get("Seller_Origin") in ("F", "D"):
+            return row.get("Seller_Origin") == "F"
+        return get_broker_group(row.get("Seller_Code")) == "Asing"
+
+    is_f_buy = dfx.apply(_is_foreign_buy, axis=1)
+    is_f_sell = dfx.apply(_is_foreign_sell, axis=1)
+    is_d_buy = ~is_f_buy
+    is_d_sell = ~is_f_sell
+
+    def _sum_where(mask, col):
+        return float(dfx.loc[mask, col].sum()) if col in dfx.columns else 0.0
+
+    def _cnt_where(mask):
+        return int(mask.sum())
+
+    out = {
+        "value": {"F_Buy": _sum_where(is_f_buy, "Value"), "F_Sell": _sum_where(is_f_sell, "Value"),
+                  "D_Buy": _sum_where(is_d_buy, "Value"), "D_Sell": _sum_where(is_d_sell, "Value")},
+        "volume": {"F_Buy": _sum_where(is_f_buy, "Lot"), "F_Sell": _sum_where(is_f_sell, "Lot"),
+                   "D_Buy": _sum_where(is_d_buy, "Lot"), "D_Sell": _sum_where(is_d_sell, "Lot")},
+        "freq": {"F_Buy": _cnt_where(is_f_buy), "F_Sell": _cnt_where(is_f_sell),
+                 "D_Buy": _cnt_where(is_d_buy), "D_Sell": _cnt_where(is_d_sell)},
+    }
+    for k in ["value", "volume", "freq"]:
+        total_f = out[k]["F_Buy"] + out[k]["F_Sell"]
+        total_d = out[k]["D_Buy"] + out[k]["D_Sell"]
+        grand = total_f + total_d
+        out[k]["Foreign_Pct"] = (total_f / grand * 100) if grand else 0.0
+        out[k]["Domestic_Pct"] = (total_d / grand * 100) if grand else 0.0
+        out[k]["Net_Foreign"] = out[k]["F_Buy"] - out[k]["F_Sell"]
+    return out
+
+@st.cache_data(ttl=300)
+def yahoo_quote(symbol: str) -> dict | None:
+    """Ambil quote ringkas dari Yahoo (tanpa library tambahan)."""
+    try:
+        url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={symbol}"
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            return None
+        j = r.json()
+        res = (j.get("quoteResponse", {}) or {}).get("result", []) or []
+        return res[0] if res else None
+    except Exception:
+        return None
+
+@st.cache_data(ttl=3600)
+def yahoo_ohlc(symbol: str, rng: str = "3mo", interval: str = "1d") -> pd.DataFrame:
+    """Ambil OHLC dari Yahoo chart API."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={rng}&interval={interval}"
+    r = requests.get(url, timeout=15)
+    r.raise_for_status()
+    j = r.json()
+    result = (j.get("chart", {}) or {}).get("result", []) or []
+    if not result:
+        return pd.DataFrame()
+    res = result[0]
+    ts = res.get("timestamp", []) or []
+    ind = (res.get("indicators", {}) or {}).get("quote", []) or []
+    if not ts or not ind:
+        return pd.DataFrame()
+    q = ind[0]
+    df = pd.DataFrame({
+        "Date": pd.to_datetime(ts, unit="s"),
+        "Open": q.get("open", []),
+        "High": q.get("high", []),
+        "Low": q.get("low", []),
+        "Close": q.get("close", []),
+        "Volume": q.get("volume", []),
+    }).dropna(subset=["Open","High","Low","Close"])
+    return df
+
+def render_top10_marquee():
+    items = []
+    for t in TOP10_IHSG_TICKERS:
+        sym = f"{t}.JK"
+        q = yahoo_quote(sym)
+        if not q:
+            continue
+        price = q.get("regularMarketPrice")
+        opn = q.get("regularMarketOpen") or q.get("regularMarketPreviousClose")
+        if price is None or opn in (None, 0):
+            continue
+        chg_pct = (price - opn) / opn * 100
+        sign = "+" if chg_pct >= 0 else ""
+        items.append((t, price, sign, chg_pct))
+
+    if not items:
+        return
+
+    spans = []
+    for t, price, sign, chg_pct in items:
+        cls = "up" if chg_pct >= 0 else "down"
+        spans.append(f"<span class='marq-item {cls}'><b>{t}</b> {price:,.0f} ({sign}{chg_pct:.2f}%)</span>")
+    html = f"""
+    <style>
+      .marq-wrap {{ width:100%; overflow:hidden; border:1px solid #1f2937; border-radius:14px; background:#0b1020; }}
+      .marq {{ display:inline-block; white-space:nowrap; padding:10px 0; animation: marq 28s linear infinite; }}
+      .marq-item {{ display:inline-block; margin:0 18px; font-size:14px; color:#e5e7eb; }}
+      .marq-item.up {{ color:#22c55e; }}
+      .marq-item.down {{ color:#ef4444; }}
+      @keyframes marq {{ 0% {{ transform: translateX(100%); }} 100% {{ transform: translateX(-100%); }} }}
+    </style>
+    <div class="marq-wrap">
+      <div class="marq">{''.join(spans)}</div>
+    </div>
+    """
+    components.html(html, height=52)
+
+def render_candlestick(stock_code: str):
+    st.subheader("📈 Candlestick (Yahoo Finance)")
+    sym = f"{stock_code}.JK"
+    rng = st.selectbox("Timeframe", ["1mo","3mo","6mo","1y","2y","5y"], index=1, key="y_rng")
+    try:
+        ohlc = yahoo_ohlc(sym, rng=rng, interval="1d")
+        if ohlc.empty:
+            st.info("Data candlestick belum tersedia di Yahoo untuk kode ini.")
+            return
+        fig = go.Figure(data=[go.Candlestick(
+            x=ohlc["Date"],
+            open=ohlc["Open"],
+            high=ohlc["High"],
+            low=ohlc["Low"],
+            close=ohlc["Close"],
+            name=sym
+        )])
+        fig.update_layout(
+            height=420,
+            margin=dict(l=10,r=10,t=40,b=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#f9fafb"),
+            xaxis_rangeslider_visible=False,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception:
+        st.warning("Gagal mengambil data dari Yahoo Finance (cek koneksi / rate limit).")
+
+def big_print_detector(df: pd.DataFrame, q: float = 0.99, min_lot: int = 0, lookahead_trades: int = 15) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    dfx = df.dropna(subset=["DateTime"]).sort_values("DateTime").copy()
+    if dfx.empty:
+        return pd.DataFrame()
+    thr = max(int(dfx["Lot"].quantile(q)), int(min_lot))
+    bp = dfx[dfx["Lot"] >= thr].copy()
+    if bp.empty:
+        return bp
+    # future price change (next N trades)
+    prices = dfx["Price"].to_numpy()
+    idx_map = {i: pos for pos, i in enumerate(dfx.index)}
+    labels = []
+    for i, row in bp.iterrows():
+        pos = idx_map.get(i)
+        if pos is None:
+            labels.append("Big Print")
+            continue
+        end = min(pos + lookahead_trades, len(dfx)-1)
+        future = prices[end]
+        cur = row["Price"]
+        pct = (future - cur) / cur * 100 if cur else 0.0
+        # heuristic label
+        if row["Action"] == "Buy":
+            if abs(pct) <= 0.10:
+                lab = "Absorption (Buy, price flat)"
+            elif pct > 0.25:
+                lab = "Impulse Up (Buy)"
+            elif pct < -0.25:
+                lab = "Failed Buy / Supply"
+            else:
+                lab = "Big Buy"
+        elif row["Action"] == "Sell":
+            if abs(pct) <= 0.10:
+                lab = "Absorption (Sell absorbed)"
+            elif pct < -0.25:
+                lab = "Distribution (Sell)"
+            elif pct > 0.25:
+                lab = "Squeeze / Trap Sell"
+            else:
+                lab = "Big Sell"
+        else:
+            lab = "Big Print"
+        labels.append(lab)
+    bp["Label"] = labels
+    bp["Threshold_Lot"] = thr
+    return bp.sort_values("DateTime")
+
+def render_big_print_section(df: pd.DataFrame):
+    st.subheader("🧱 Big Print + Absorption/Distribution")
+    if df.empty:
+        st.info("Data kosong.")
+        return
+    c1, c2, c3 = st.columns([1,1,1])
+    with c1:
+        q = st.slider("Ambang percentile (Lot)", 0.90, 0.995, 0.99, step=0.005)
+    with c2:
+        min_lot = st.number_input("Minimal Lot (opsional)", min_value=0, value=0, step=10)
+    with c3:
+        lookahead = st.slider("Lookahead (jumlah trade)", 5, 50, 15, step=5)
+
+    bp = big_print_detector(df, q=q, min_lot=int(min_lot), lookahead_trades=int(lookahead))
+    if bp.empty:
+        st.info("Tidak ada Big Print di ambang ini.")
+        return
+
+    st.caption(f"Big Print threshold ≈ **{int(bp['Threshold_Lot'].iloc[0]):,} lot** (atau min lot).")
+    # ringkas label
+    lab_counts = bp["Label"].value_counts().reset_index()
+    lab_counts.columns = ["Label","Count"]
+    st.dataframe(lab_counts, use_container_width=True, height=220)
+
+    show_cols = ["DateTime","Price","Lot","Action","Buyer_Code","Seller_Code","Market","Label","__source_file"]
+    show_cols = [c for c in show_cols if c in bp.columns]
+    st.dataframe(bp[show_cols].sort_values("DateTime", ascending=False).reset_index(drop=True),
+                 use_container_width=True, height=420)
+
+def broker_consistency(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+
+    dfx = df.copy()
+    dfx["Date"] = pd.to_datetime(dfx["TradeDate"]).dt.date
+
+    # daily buy/sell per broker
+    buy = dfx.groupby(["Date","Buyer_Code"]).agg(Buy_Lot=("Lot","sum"), Buy_Val=("Value","sum"))
+    sell = dfx.groupby(["Date","Seller_Code"]).agg(Sell_Lot=("Lot","sum"), Sell_Val=("Value","sum"))
+    buy.index.names = ["Date","Code"]
+    sell.index.names = ["Date","Code"]
+    daily = buy.join(sell, how="outer").fillna(0)
+    daily["Net_Lot_D"] = daily["Buy_Lot"] - daily["Sell_Lot"]
+    daily["Net_Val_D"] = daily["Buy_Val"] - daily["Sell_Val"]
+    daily = daily.reset_index()
+
+    # aggregate
+    agg = daily.groupby("Code").agg(
+        Days_Active=("Date","nunique"),
+        Net_Buy_Days=("Net_Lot_D", lambda x: int((x>0).sum())),
+        Net_Sell_Days=("Net_Lot_D", lambda x: int((x<0).sum())),
+        Net_Lot=("Net_Lot_D","sum"),
+        Net_Val=("Net_Val_D","sum"),
+        Buy_Lot=("Buy_Lot","sum"),
+        Sell_Lot=("Sell_Lot","sum"),
+        Buy_Val=("Buy_Val","sum"),
+        Sell_Val=("Sell_Val","sum"),
+    ).reset_index()
+
+    # avg prices
+    agg["Buy_Avg"] = 0
+    m = agg["Buy_Lot"] > 0
+    agg.loc[m, "Buy_Avg"] = (agg.loc[m, "Buy_Val"] / (agg.loc[m, "Buy_Lot"]*100)).round(0).astype(int)
+
+    agg["Sell_Avg"] = 0
+    m2 = agg["Sell_Lot"] > 0
+    agg.loc[m2, "Sell_Avg"] = (agg.loc[m2, "Sell_Val"] / (agg.loc[m2, "Sell_Lot"]*100)).round(0).astype(int)
+
+    # consistency score: dominan net-buy vs net-sell sepanjang hari aktif (0-100)
+    def _score(row):
+        da = row["Days_Active"] or 1
+        return int(50 + 50*((row["Net_Buy_Days"] - row["Net_Sell_Days"]) / da))
+    agg["Consistency_Score"] = agg.apply(_score, axis=1)
+
+    agg["Name"] = agg["Code"].apply(lambda x: get_broker_info(x)[1])
+    agg["Group"] = agg["Code"].apply(lambda x: get_broker_info(x)[2])
+
+    # urut: net val besar + skor konsisten
+    agg = agg.sort_values(["Net_Val","Consistency_Score"], ascending=[False, False])
+    return agg
+
+def render_broker_consistency_section(df: pd.DataFrame, start_date: datetime.date, end_date: datetime.date):
+    st.subheader("🏦 Broker Consistency + Top Accumulation (Multi-day)")
+    if df.empty:
+        st.info("Data kosong.")
+        return
+    cons = broker_consistency(df)
+    if cons.empty:
+        st.info("Tidak cukup data untuk menghitung konsistensi.")
+        return
+
+    st.caption(f"Periode: **{start_date.strftime('%d/%m/%Y')}** s/d **{end_date.strftime('%d/%m/%Y')}**")
+    # Top accum / distrib
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Top Accumulation (Net Lot +)**")
+        top_a = cons[cons["Net_Lot"]>0].copy().head(15)
+        show = ["Code","Name","Group","Net_Lot","Net_Val","Days_Active","Net_Buy_Days","Consistency_Score","Buy_Avg","Sell_Avg"]
+        st.dataframe(top_a[show], use_container_width=True, height=380)
+    with c2:
+        st.markdown("**Top Distribution (Net Lot -)**")
+        top_d = cons[cons["Net_Lot"]<0].copy().sort_values("Net_Lot").head(15)
+        show = ["Code","Name","Group","Net_Lot","Net_Val","Days_Active","Net_Sell_Days","Consistency_Score","Buy_Avg","Sell_Avg"]
+        st.dataframe(top_d[show], use_container_width=True, height=380)
+
+    st.markdown("**Semua Broker (urut Net Val)**")
+    st.dataframe(cons.reset_index(drop=True), use_container_width=True, height=520)
+
+# =========================================================
+# 11. BANDARMOLOGY PAGE (UPDATED)
+# =========================================================
 def bandarmology_page():
     DB_ROOT = "database"
 
     df_raw = st.session_state.get("df_raw")
     current_stock = st.session_state.get("current_stock", "UNKNOWN")
 
-    # --------- SIDEBAR: Sumber Data ---------
+    # --------- SIDEBAR: LOAD DATA ---------
     with st.sidebar:
-        st.markdown(get_stock_ticker(), unsafe_allow_html=True) # Ticker restored
-        st.markdown("### 📂 Sumber Data")
+        st.markdown("### 📁 Sumber Data")
         source_type = st.radio(
             "Sumber Data",
             ["Database Folder", "Upload Manual"],
             index=0,
-            key="source_type_main",
+            horizontal=False,
         )
 
+        # Pilih saham
+        sel_stock = None
         if source_type == "Database Folder":
             if os.path.exists(DB_ROOT):
-                stocks = sorted([
-                    d for d in os.listdir(DB_ROOT) if os.path.isdir(os.path.join(DB_ROOT, d))
-                ])
+                stocks = sorted([d for d in os.listdir(DB_ROOT) if os.path.isdir(os.path.join(DB_ROOT, d))])
                 sel_stock = st.selectbox("Saham", stocks) if stocks else None
-
                 if not sel_stock:
                     st.info("Tidak ada folder saham di database.")
                 else:
-                    default_date = st.session_state.get("selected_date")
-                    if default_date is None:
-                        default_date = datetime.date.today()
-
+                    # date range
+                    default_start = st.session_state.get("selected_start_date") or datetime.date.today()
+                    default_end = st.session_state.get("selected_end_date") or default_start
                     try:
-                        sel_date = st.date_input(
-                            "Tanggal",
-                            value=default_date,
-                            format="DD/MM/YYYY",
-                            key="db_date",
-                        )
+                        start_date = st.date_input("Mulai Tanggal", value=default_start, format="DD/MM/YYYY", key="db_start")
+                        end_date = st.date_input("Sampai Tanggal", value=default_end, format="DD/MM/YYYY", key="db_end")
                     except TypeError:
-                        sel_date = st.date_input("Tanggal", value=default_date, key="db_date")
+                        start_date = st.date_input("Mulai Tanggal", value=default_start, key="db_start")
+                        end_date = st.date_input("Sampai Tanggal", value=default_end, key="db_end")
 
-                    st.session_state["selected_date"] = sel_date
+                    if end_date < start_date:
+                        st.warning("Sampai Tanggal harus >= Mulai Tanggal.")
+                    st.session_state["selected_start_date"] = start_date
+                    st.session_state["selected_end_date"] = end_date
 
-                    load_btn = st.button("Load Data", use_container_width=True)
-                    if load_btn:
-                        fps = resolve_database_files(DB_ROOT, sel_stock, sel_date)
+                    if st.button("Load Data", use_container_width=True):
+                        fps = resolve_database_files_range(DB_ROOT, sel_stock, start_date, end_date)
                         if not fps:
-                            st.warning("Data tidak tersedia untuk tanggal tersebut.")
+                            st.warning("Data tidak tersedia untuk rentang tanggal tersebut.")
                         else:
-                            try:
-                                df_raw = load_database_files(fps)
-                                if df_raw.empty:
-                                    st.error("File ditemukan, tapi gagal dibaca. Cek format CSV/XLSX.")
-                                else:
-                                    current_stock = sel_stock
-                                    st.session_state["df_raw"] = df_raw
-                                    st.session_state["current_stock"] = current_stock
-                                    # Debug / transparansi: file apa saja yang kebaca
-                                    with st.expander("Detail file yang ter-load", expanded=False):
-                                        st.write("Jumlah file:", len(fps))
-                                        st.write("Daftar file:")
-                                        for p in fps:
-                                            st.code(p)
-                                        st.write("Jumlah baris (raw):", len(df_raw))
-                                    st.toast(f"Data {sel_stock} dimuat ({len(fps)} file).", icon="✅")
-                            except Exception:
-                                st.error("Gagal load data, cek file-nya.")
+                            df_raw_new = load_database_files(fps)
+                            if df_raw_new.empty:
+                                st.error("File ditemukan, tapi gagal dibaca. Cek format CSV/XLSX.")
+                            else:
+                                st.session_state["df_raw"] = df_raw_new
+                                st.session_state["current_stock"] = sel_stock
+                                st.toast(f"Data {sel_stock} dimuat ({len(fps)} file).", icon="✅")
+                                with st.expander("Detail file yang ter-load", expanded=False):
+                                    st.write("Jumlah file:", len(fps))
+                                    st.write("Rentang:", f"{start_date} s/d {end_date}")
+                                    st.write("Daftar file:")
+                                    for p in fps[:80]:
+                                        st.code(p)
+                                    if len(fps) > 80:
+                                        st.caption(f"... {len(fps)-80} file lain")
+                                    st.write("Jumlah baris (raw):", len(df_raw_new))
             else:
                 st.warning(f"Folder database '{DB_ROOT}' belum dibuat.")
         else:
-            uploaded = st.file_uploader(
-                "Upload File Running Trade",
-                type=["csv", "xlsx"],
-                key="upload_file",
-            )
+            uploaded = st.file_uploader("Upload File Running Trade", type=["csv", "xlsx"], key="upload_file")
             if uploaded:
                 try:
                     if uploaded.name.endswith("csv"):
                         df_raw = pd.read_csv(uploaded)
                     else:
                         df_raw = pd.read_excel(uploaded)
-                    current_stock = "UPLOADED"
                     st.session_state["df_raw"] = df_raw
-                    st.session_state["current_stock"] = current_stock
+                    st.session_state["current_stock"] = "UPLOADED"
                 except Exception:
                     st.error("File tidak dapat dibaca, cek formatnya.")
 
-
-        st.markdown("### ⚙️ Pengaturan Nilai")
-        volume_mode_ui = st.selectbox(
-            "Satuan Volume di file",
-            ["Auto", "Lot (1 lot = 100 saham)", "Shares (lembar saham)"],
-            index=0,
-            key="volume_mode",
-        )
-        st.caption("Kalau nilai transaksi jadi terlalu besar/kecil, ubah opsi ini lalu refresh analisis.")
+    df_raw = st.session_state.get("df_raw")
+    current_stock = st.session_state.get("current_stock", "UNKNOWN")
 
     # --------- MAIN CONTENT ---------
     if df_raw is None:
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.markdown(
             """
-            <div style="
-                background-color:#020617;
-                padding:40px 30px;
-                border-radius:18px;
-                margin:0 4%;
-                border:1px dashed #283548;
-                text-align:center;
-                box-shadow:0 18px 45px rgba(0,0,0,0.65);">
+            <div style="background-color:#020617;padding:40px 30px;border-radius:18px;margin:0 4%;
+                        border:1px dashed #283548;text-align:center;box-shadow:0 18px 45px rgba(0,0,0,0.65);">
                 <h2 style="margin-bottom:6px;">Belum ada data yang dipilih 📁</h2>
                 <p style="color:#9ca3af;font-size:14px;">
-                    Pilih sumber data dan file running trade di sidebar untuk mulai analisis bandarmology saham kamu.
+                    Pilih sumber data dan load running trade di sidebar untuk mulai analisis.
                 </p>
             </div>
             """,
@@ -1553,86 +2051,92 @@ def bandarmology_page():
         return
 
     try:
-        # Data Cleaning & Processing
-        df = clean_running_trade(df_raw, trade_date=st.session_state.get('selected_date'), volume_mode=st.session_state.get("volume_mode","Auto"))
+        start_date = st.session_state.get("selected_start_date") or st.session_state.get("selected_date") or datetime.date.today()
+        end_date = st.session_state.get("selected_end_date") or start_date
+
+        # cleaning
+        df = clean_running_trade(df_raw, trade_date=start_date, volume_mode="LOT")
+        if df.empty:
+            st.warning("Data kosong setelah dibersihkan.")
+            return
+
         summ = get_detailed_broker_summary(df)
+
+        # Top marquee
+        render_top10_marquee()
 
         st.title(f"📊 Bandarmology {current_stock}")
 
         # Metrics Top
         col1, col2, col3, col4 = st.columns(4)
-        tot_val = df["Value"].sum()
+        tot_val = float(df["Value"].sum())
         col1.metric("Total Transaksi", f"Rp {format_number_label(tot_val)}")
         col2.metric("Total Volume", f"{format_lot_label(df['Lot'].sum())} Lot")
         col3.metric("Frequency", f"{format_freq_label(len(df))} x")
 
-        foreign_net = summ[summ["Group"] == "Asing"]["Net_Val"].sum()
-        col4.metric("Net Foreign", f"Rp {format_number_label(foreign_net)}", delta_color="normal" if foreign_net==0 else ("inverse" if foreign_net < 0 else "normal"))
+        fd_stats = compute_foreign_domestic_activity(df)
+        foreign_net_val = float(fd_stats["value"]["Net_Foreign"])
+        col4.metric("Net Foreign", f"Rp {format_number_label(foreign_net_val)}",
+                    delta="Net Buy" if foreign_net_val>0 else ("Net Sell" if foreign_net_val<0 else "Flat"))
+
+        st.markdown("---")
+
+        # Candlestick (Yahoo)
+        if current_stock not in ("UNKNOWN","UPLOADED"):
+            render_candlestick(current_stock)
 
         st.markdown("---")
 
         # Foreign–Domestic Activity (mirip sekuritas)
         fd_stats = render_foreign_domestic_activity(df)
 
-        # Kesimpulan / Insight
-        render_insight_box(df, summ, fd_stats)
+        st.markdown("---")
 
         # Broker Action Meter
         render_broker_action_meter(summ)
         st.write("")
 
-        # Broker Summary Split (Modified)
+        # Broker Summary Split
         net_mode = st.toggle("Net Mode (Show Net Buy/Sell)", value=True)
         render_broker_summary_split(summ, net_mode)
 
         st.markdown("---")
-        
-        # Trade Book (Chart & Price)
-        render_trade_book(df)
-        
+
+        # Broker Consistency (multi-day)
+        render_broker_consistency_section(df, start_date=start_date, end_date=end_date)
+
         st.markdown("---")
-        
-        # Running Trade Filtered
+
+        # Big Print / Absorption
+        render_big_print_section(df)
+
+        st.markdown("---")
+
+        # Trade Book
+        render_trade_book(df)
+
+        st.markdown("---")
+
+        # Running Trade
         render_running_trade_raw(df)
-        
+
         st.markdown("---")
 
         st.subheader("🕸️ Broker Flow (Sankey)")
         left, right = st.columns([2, 1])
         with left:
-            metric_choice = st.radio(
-                "Metrik",
-                ["Value (Dana)", "Lot (Volume)"],
-                horizontal=True,
-            )
+            metric_choice = st.radio("Metrik", ["Value (Dana)", "Lot (Volume)"], horizontal=True)
         with right:
             top_n = st.slider("Jumlah interaksi", 5, 50, 15)
 
         metric_col = "Value" if "Value" in metric_choice else "Lot"
-
         try:
-            labels, node_colors, src, tgt, vals, link_colors = build_sankey(
-                df, top_n=top_n, metric=metric_col
-            )
-            fig = go.Figure(
-                data=[
-                    go.Sankey(
-                        node=dict(
-                            pad=20,
-                            thickness=18,
-                            line=dict(color="black", width=0.3),
-                            label=labels,
-                            color=node_colors,
-                        ),
-                        link=dict(
-                            source=src,
-                            target=tgt,
-                            value=vals,
-                            color=link_colors,
-                        ),
-                    )
-                ]
-            )
+            labels, node_colors, src, tgt, vals, link_colors = build_sankey(df, top_n=top_n, metric=metric_col)
+            fig = go.Figure(data=[go.Sankey(
+                node=dict(pad=20, thickness=18, line=dict(color="black", width=0.3),
+                          label=labels, color=node_colors),
+                link=dict(source=src, target=tgt, value=vals, color=link_colors)
+            )])
             fig.update_layout(
                 height=600,
                 margin=dict(l=10, r=10, t=10, b=10),
@@ -1641,26 +2145,17 @@ def bandarmology_page():
                 plot_bgcolor="rgba(0,0,0,0)",
             )
             st.plotly_chart(fig, use_container_width=True)
+        except Exception:
+            st.info("Sankey tidak bisa dibuat untuk data ini (mungkin data terlalu sedikit).")
 
-            st.markdown(
-                """
-                <div style="text-align:center;margin-top:-10px;">
-                    <span class="tag tag-Asing">Asing</span>
-                    <span class="tag tag-BUMN">BUMN</span>
-                    <span class="tag tag-Lokal">Lokal</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        except Exception as e:
-            st.warning(f"Error pada visual Sankey: {e}")
+        # Kesimpulan / Insight di paling bawah (sesuai request)
+        st.markdown("---")
+        render_insight_box(df, summ, fd_stats)
 
     except Exception as e:
-        st.error(f"Error saat memproses data: {e}")
+        st.error("Terjadi error saat memproses data. Cek format file kamu.")
+        st.exception(e)
 
-# =========================================================
-# 10. PAGE BARU: DAFTAR BROKER (ALFABET, FILTER & SEARCH)
-# =========================================================
 def daftar_broker_page():
     st.title("📚 Daftar Broker / Sekuritas")
 
