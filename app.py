@@ -6,6 +6,7 @@ import re
 import os
 import datetime
 import requests
+import time
 import streamlit.components.v1 as components
 
 # =========================================================
@@ -1731,35 +1732,82 @@ def compute_foreign_domestic_activity(df: pd.DataFrame):
         out[k]["Net_Foreign"] = out[k]["F_Buy"] - out[k]["F_Sell"]
     return out
 
-@st.cache_data(ttl=300)
-def yahoo_quote(symbol: str) -> dict | None:
-    """Ambil quote ringkas dari Yahoo (tanpa library tambahan)."""
+
+# ---------------------------
+# Yahoo Finance (robust fetch)
+# ---------------------------
+_YAHOO_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+    "Connection": "keep-alive",
+}
+
+_YAHOO_SESSION = requests.Session()
+_YAHOO_SESSION.headers.update(_YAHOO_HEADERS)
+
+def _yahoo_get(url: str, timeout: int = 15, retries: int = 3) -> requests.Response:
+    """HTTP GET ke Yahoo dengan retry ringan (untuk 429/5xx)."""
+    last_exc = None
+    for i in range(retries):
+        try:
+            r = _YAHOO_SESSION.get(url, timeout=timeout)
+            # rate limit / transient
+            if r.status_code in (429, 500, 502, 503, 504):
+                time.sleep(0.6 * (i + 1))
+                continue
+            r.raise_for_status()
+            return r
+        except Exception as e:
+            last_exc = e
+            time.sleep(0.6 * (i + 1))
+    # lempar exception terakhir biar kelihatan di debug kalau perlu
+    raise last_exc if last_exc else RuntimeError("Yahoo request failed")
+
+@st.cache_data(ttl=60)
+def yahoo_quotes(symbols: list[str]) -> dict:
+    """Batch quote: 1 request untuk banyak simbol."""
+    if not symbols:
+        return {}
+    syms = ",".join(symbols)
+    url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={syms}"
     try:
-        url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={symbol}"
-        r = requests.get(url, timeout=10)
-        if r.status_code != 200:
-            return None
+        r = _yahoo_get(url, timeout=12, retries=3)
         j = r.json()
         res = (j.get("quoteResponse", {}) or {}).get("result", []) or []
-        return res[0] if res else None
+        return {item.get("symbol"): item for item in res if item.get("symbol")}
     except Exception:
-        return None
+        return {}
+
+@st.cache_data(ttl=60)
+def yahoo_quote(symbol: str) -> dict | None:
+    q = yahoo_quotes([symbol])
+    return q.get(symbol)
 
 @st.cache_data(ttl=3600)
 def yahoo_ohlc(symbol: str, rng: str = "3mo", interval: str = "1d") -> pd.DataFrame:
     """Ambil OHLC dari Yahoo chart API."""
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={rng}&interval={interval}"
-    r = requests.get(url, timeout=15)
-    r.raise_for_status()
-    j = r.json()
+    try:
+        r = _yahoo_get(url, timeout=15, retries=3)
+        j = r.json()
+    except Exception:
+        return pd.DataFrame()
+
     result = (j.get("chart", {}) or {}).get("result", []) or []
     if not result:
         return pd.DataFrame()
+
     res = result[0]
     ts = res.get("timestamp", []) or []
     ind = (res.get("indicators", {}) or {}).get("quote", []) or []
     if not ts or not ind:
         return pd.DataFrame()
+
     q = ind[0]
     df = pd.DataFrame({
         "Date": pd.to_datetime(ts, unit="s"),
@@ -1768,21 +1816,24 @@ def yahoo_ohlc(symbol: str, rng: str = "3mo", interval: str = "1d") -> pd.DataFr
         "Low": q.get("low", []),
         "Close": q.get("close", []),
         "Volume": q.get("volume", []),
-    }).dropna(subset=["Open","High","Low","Close"])
+    }).dropna(subset=["Open", "High", "Low", "Close"])
     return df
 
+
 def render_top10_marquee():
+    symbols = [f"{t}.JK" for t in TOP10_IHSG_TICKERS]
+    quotes = yahoo_quotes(symbols)
+
     items = []
     for t in TOP10_IHSG_TICKERS:
         sym = f"{t}.JK"
-        q = yahoo_quote(sym)
-        if not q:
-            continue
+        q = quotes.get(sym) or {}
         price = q.get("regularMarketPrice")
-        opn = q.get("regularMarketOpen") or q.get("regularMarketPreviousClose")
-        if price is None or opn in (None, 0):
+        # pakai open (intraday), kalau kosong fallback previous close
+        base = q.get("regularMarketOpen") or q.get("regularMarketPreviousClose")
+        if price is None or base in (None, 0):
             continue
-        chg_pct = (price - opn) / opn * 100
+        chg_pct = (price - base) / base * 100
         sign = "+" if chg_pct >= 0 else ""
         items.append((t, price, sign, chg_pct))
 
@@ -1792,7 +1843,9 @@ def render_top10_marquee():
     spans = []
     for t, price, sign, chg_pct in items:
         cls = "up" if chg_pct >= 0 else "down"
-        spans.append(f"<span class='marq-item {cls}'><b>{t}</b> {price:,.0f} ({sign}{chg_pct:.2f}%)</span>")
+        spans.append(
+            f"<span class='marq-item {cls}'><b>{t}</b> {price:,.0f} ({sign}{chg_pct:.2f}%)</span>"
+        )
     html = f"""
     <style>
       .marq-wrap {{ width:100%; overflow:hidden; border:1px solid #1f2937; border-radius:14px; background:#0b1020; }}
