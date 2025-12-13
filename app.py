@@ -376,13 +376,45 @@ def render_footer():
 # 5. TOOLS LAIN (YAHOO TICKER, FORMAT, DLL)
 # =========================================================
 def format_number_label(value):
+    """Format angka biar mirip tampilan sekuritas (IDR): K/M/B/T."""
+    try:
+        value = float(value)
+    except Exception:
+        return str(value)
+
+
+def format_lot_label(value):
+    try:
+        value = float(value)
+    except Exception:
+        return str(value)
+    abs_val = abs(value)
+    if abs_val >= 1e6:
+        return f"{value/1e6:.2f}M"
+    if abs_val >= 1e3:
+        return f"{value/1e3:.2f}K"
+    return f"{value:,.0f}"
+
+def format_freq_label(value):
+    try:
+        value = float(value)
+    except Exception:
+        return str(value)
+    abs_val = abs(value)
+    if abs_val >= 1e6:
+        return f"{value/1e6:.2f}M"
+    if abs_val >= 1e3:
+        return f"{value/1e3:.2f}K"
+    return f"{value:,.0f}"
     abs_val = abs(value)
     if abs_val >= 1e12:
         return f"{value/1e12:.2f}T"
     if abs_val >= 1e9:
-        return f"{value/1e9:.2f}M"
+        return f"{value/1e9:.2f}B"
     if abs_val >= 1e6:
-        return f"{value/1e6:.2f}Jt"
+        return f"{value/1e6:.2f}M"
+    if abs_val >= 1e3:
+        return f"{value/1e3:.2f}K"
     return f"{value:,.0f}"
 
 
@@ -660,9 +692,50 @@ def clean_running_trade(df_input: pd.DataFrame, trade_date: datetime.date | None
         return s.split()[0] if s else ""
 
     def _to_int_series(s: pd.Series) -> pd.Series:
-        # buang semua non-digit, lalu to_numeric
-        out = pd.to_numeric(s.astype(str).str.replace(r"[^\d]", "", regex=True), errors="coerce")
+        # generic int cleaner (dipakai untuk kolom yang memang murni angka)
+        out = pd.to_numeric(s.astype(str).str.replace(r"[^\d-]", "", regex=True), errors="coerce")
         return out.fillna(0).astype(int)
+
+    def _parse_first_number_series(s: pd.Series) -> pd.Series:
+        """Ambil angka pertama dari string (penting untuk Price seperti '1,190 (+2.15%)')."""
+        def _one(x):
+            if pd.isna(x):
+                return float('nan')
+            t = str(x)
+            m = re.search(r"([0-9][0-9,\.]+)", t)
+            if not m:
+                return float('nan')
+            num = m.group(1).replace(",", "")
+            if num.endswith("."):
+                num = num[:-1]
+            try:
+                return float(num)
+            except Exception:
+                return float('nan')
+        out = s.apply(_one)
+        return pd.to_numeric(out, errors="coerce")
+
+    def _parse_lot_series(s: pd.Series) -> pd.Series:
+        """Lot bisa integer, bisa juga desimal kecil (mis. 0.06)."""
+        def _one(x):
+            if pd.isna(x):
+                return float('nan')
+            t = str(x).strip().replace(",", "")
+            try:
+                return float(t)
+            except Exception:
+                m = re.search(r"([0-9][0-9,\.]+)", t)
+                if not m:
+                    return float('nan')
+                num = m.group(1).replace(",", "")
+                if num.endswith("."):
+                    num = num[:-1]
+                try:
+                    return float(num)
+                except Exception:
+                    return float('nan')
+        out = s.apply(_one)
+        return pd.to_numeric(out, errors="coerce")
 
     def _parse_time_to_dt(val, base_date: datetime.date) -> pd.Timestamp:
         if pd.isna(val):
@@ -693,8 +766,8 @@ def clean_running_trade(df_input: pd.DataFrame, trade_date: datetime.date | None
         return pd.Timestamp(datetime.datetime.combine(base_date, t.time()))
 
     # --- 4) Clean numerik ---
-    df["Price"] = _to_int_series(df["Price"])
-    df["Lot"] = _to_int_series(df["Lot"])
+    df["Price"] = _parse_first_number_series(df["Price"]).round(0).astype("int64")
+    df["Lot"] = _parse_lot_series(df["Lot"])
     # --- 7b) Satuan Volume (Lot vs Shares) ---
     # Banyak data sekuritas menampilkan volume dalam "Shares (lembar)", sementara file lain sudah dalam "Lot".
     # Kalau salah asumsi, nilai transaksi bisa melonjak (mis. jadi triliunan) atau mengecil.
@@ -716,10 +789,11 @@ def clean_running_trade(df_input: pd.DataFrame, trade_date: datetime.date | None
             mode = "SHARES" if (div100 > 0.90 and med >= 100) else "LOT"
 
     if mode == "SHARES":
-        df["Shares"] = df["Lot"].astype("int64")
+        df["Shares"] = df["Lot"].round(0).astype("int64")
         df["Lot"] = (df["Shares"] // 100).astype("int64")
     else:
         df["Lot"] = df["Lot"].astype("int64")
+        df["Lot"] = df["Lot"].round(0).astype("int64")
         df["Shares"] = (df["Lot"] * 100).astype("int64")
 
 
@@ -1457,8 +1531,8 @@ def bandarmology_page():
         col1, col2, col3, col4 = st.columns(4)
         tot_val = df["Value"].sum()
         col1.metric("Total Transaksi", f"Rp {format_number_label(tot_val)}")
-        col2.metric("Total Volume", f"{df['Lot'].sum():,} Lot")
-        col3.metric("Frequency", f"{len(df):,} x")
+        col2.metric("Total Volume", f"{format_lot_label(df['Lot'].sum())} Lot")
+        col3.metric("Frequency", f"{format_freq_label(len(df))} x")
 
         foreign_net = summ[summ["Group"] == "Asing"]["Net_Val"].sum()
         col4.metric("Net Foreign", f"Rp {format_number_label(foreign_net)}", delta_color="normal" if foreign_net==0 else ("inverse" if foreign_net < 0 else "normal"))
