@@ -1592,6 +1592,49 @@ def clean_running_trade(df_input: pd.DataFrame, trade_date: datetime.date | None
         except Exception:
             return float("nan")
 
+
+    def _parse_time_to_dt(val, base_date: datetime.date) -> pd.Timestamp:
+        """Parse kolom Time yang sering variatif: '08:58', '8:58.00', '08:58:00', '08:58:00.123', dst.
+        Mengembalikan Timestamp dengan tanggal = base_date.
+        """
+        if pd.isna(val):
+            return pd.NaT
+
+        # Sudah timestamp/datetime
+        if isinstance(val, (pd.Timestamp, datetime.datetime)):
+            ts = pd.Timestamp(val)
+            # kalau tanggal dummy, ganti ke base_date
+            if ts.date() in (datetime.date(1900, 1, 1), datetime.date(1970, 1, 1)):
+                return pd.Timestamp(datetime.datetime.combine(base_date, ts.time()))
+            return ts
+
+        if isinstance(val, datetime.time):
+            return pd.Timestamp(datetime.datetime.combine(base_date, val))
+
+        s = str(val).strip()
+        if not s:
+            return pd.NaT
+
+        # Ambil token waktu pertama saja (menghindari '1,190 (+2.15%)' dsb bila salah kolom)
+        m = re.search(r"(\d{1,2}:\d{2}(?:[:\.]\d{2})?)", s)
+        if m:
+            s = m.group(1)
+
+        # 8:58.00 -> 8:58:00
+        if re.match(r"^\d{1,2}:\d{2}\.\d{2}$", s):
+            s = s.replace(".", ":")
+
+        # 8:58 -> 8:58:00
+        if re.match(r"^\d{1,2}:\d{2}$", s):
+            s = s + ":00"
+
+        t = pd.to_datetime(s, errors="coerce")
+        if pd.isna(t):
+            return pd.NaT
+
+        return pd.Timestamp(datetime.datetime.combine(base_date, t.time()))
+
+
     def _parse_time_to_dt_local(t, base_date: datetime.date):
         # pakai parser lama (yang sudah toleran)
         return _parse_time_to_dt(t, base_date)
